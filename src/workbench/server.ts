@@ -507,7 +507,7 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
   );
   if (host === "0.0.0.0" || host === "::") {
     console.log(
-      `\x1b[90mNon-loopback mode: use the private exe.dev proxy and open the one-time launch URL.\x1b[0m`,
+      `\x1b[90mNon-loopback mode: a private exe.dev launch URL will print when detected; the local URL remains available.\x1b[0m`,
     );
   }
 

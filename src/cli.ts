@@ -303,8 +303,18 @@ async function runWorkbench(args: string[]) {
       }
     } else fail(`Unknown workbench option: ${args[index]}`);
   }
-  const { startWorkbench } = await import("./workbench/server");
-  await startWorkbench({ host, port });
+  const [{ announceExeDevWorkbench }, { startWorkbench }] = await Promise.all([
+    import("./workbench/exe-dev"),
+    import("./workbench/server"),
+  ]);
+  const instance = await startWorkbench({ host, port });
+  if (host === "0.0.0.0" || host === "::") {
+    void announceExeDevWorkbench({
+      bindHost: host,
+      port,
+      token: instance.token,
+    }).catch(() => undefined);
+  }
   return new Promise<number>(() => undefined);
 }
 

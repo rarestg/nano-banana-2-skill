@@ -45,6 +45,10 @@ Get a Gemini API key at: https://aistudio.google.com/apikey
 
 - One-shot CLI: `nano-banana "prompt" [options]`
 - Review Workbench: `nano-banana workbench`
+- On exe.dev: `nano-banana workbench --host 0.0.0.0 --port 4173`; open the
+  authenticated HTTPS URL printed after best-effort proxy detection (the VM's
+  default port omits `:4173`). If Reflection is unavailable, use the documented
+  `https://<vm-name>.exe.xyz:4173/?token=...` form with the printed token.
 - Use the CLI for one direct result. Use the Workbench for variants,
   comparison, native-size review, winner selection, history, and export.
 - Read `docs/style-recipes.md` only when authoring or changing recipes.

@@ -106,9 +106,18 @@ the documented range:
 nano-banana workbench --host 0.0.0.0 --port 4173
 ```
 
-Replace the host in the printed launch URL with the VM's
-`https://<vm-name>.exe.xyz:4173/` address and retain the `?token=...` query for
-that first request. The redirect removes it immediately.
+The local authenticated URL prints immediately. The Workbench then checks the
+documented exe.dev Reflection integration without delaying startup and, when
+detected, prints a second authenticated URL. Its canonical forms are
+`https://<vm-name>.exe.xyz/?token=...` for the VM's default proxy port and
+`https://<vm-name>.exe.xyz:4173/?token=...` for an explicit port. Detection is best-effort: if
+Reflection is unavailable, the local URL remains usable and the documented
+port-qualified form can be constructed manually. exe.dev only proxies
+port-qualified URLs for ports from 3000 through 9999.
+
+Open the authenticated URL once. The redirect removes its query token
+immediately.
+
 Keep the exe.dev proxy private. Proxy authentication supplements the launch
 token; it does not replace it. Mutating requests require the full expected
 origin—scheme and host. Behind exe.dev, the documented `X-Forwarded-Host` and

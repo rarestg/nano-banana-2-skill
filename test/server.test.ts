@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { discoverExeDevLaunchUrl } from "../src/workbench/exe-dev";
 import { startWorkbench, validateUploadContentLength } from "../src/workbench/server";
 import { pngBytes } from "./helpers";
 
@@ -110,7 +111,15 @@ describe("local server safety", () => {
     instances.push(instance);
     roots.push(root);
     const localOrigin = new URL(instance.url).origin;
-    const publicHost = `test-vm.exe.xyz:${instance.server.port}`;
+    const publicUrl = await discoverExeDevLaunchUrl(
+      { bindHost: "0.0.0.0", port: 4173, token: instance.token },
+      {
+        fetch: async () => Response.json({ default_port: 8000 }),
+        hostname: () => "test-vm",
+      },
+    );
+    expect(publicUrl).toBe(`https://test-vm.exe.xyz:4173/?token=${instance.token}`);
+    const publicHost = new URL(publicUrl ?? "https://invalid.example").host;
     const forwarded = {
       "x-workbench-token": instance.token,
       "x-forwarded-host": publicHost,
@@ -119,6 +128,10 @@ describe("local server safety", () => {
     };
     expect((await fetch(`${localOrigin}/api/bootstrap`, { headers: forwarded })).status).toBe(200);
     const launch = await fetch(instance.url, { headers: forwarded, redirect: "manual" });
+    expect(launch.status).toBe(303);
+    expect(launch.headers.get("location")).toBe("/");
+    expect(launch.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(launch.headers.get("set-cookie")).toContain("SameSite=Strict");
     expect(launch.headers.get("set-cookie")).toContain("Secure");
     const acceptedOrigin = await fetch(`${localOrigin}/api/sessions/missing/cancel`, {
       method: "POST",
@@ -130,6 +143,46 @@ describe("local server safety", () => {
       headers: { ...forwarded, origin: `http://${publicHost}` },
     });
     expect(rejectedScheme.status).toBe(403);
+    const rejectedPort = await fetch(`${localOrigin}/api/sessions/missing/cancel`, {
+      method: "POST",
+      headers: {
+        ...forwarded,
+        "x-forwarded-host": "test-vm.exe.xyz:4174",
+        origin: `https://${publicHost}`,
+      },
+    });
+    expect(rejectedPort.status).toBe(403);
+    const rejectedHost = await fetch(`${localOrigin}/api/sessions/missing/cancel`, {
+      method: "POST",
+      headers: {
+        ...forwarded,
+        "x-forwarded-host": "test-vm.exe.xyz.evil.example",
+        origin: "https://test-vm.exe.xyz.evil.example",
+      },
+    });
+    expect(rejectedHost.status).toBe(403);
+
+    const defaultPortUrl = await discoverExeDevLaunchUrl(
+      { bindHost: "0.0.0.0", port: 4173, token: instance.token },
+      {
+        fetch: async () => Response.json({ default_port: 4173 }),
+        hostname: () => "test-vm",
+      },
+    );
+    expect(defaultPortUrl).toBe(`https://test-vm.exe.xyz/?token=${instance.token}`);
+    const defaultForwarded = {
+      ...forwarded,
+      "x-forwarded-host": "test-vm.exe.xyz",
+      origin: "https://test-vm.exe.xyz",
+    };
+    expect(
+      (
+        await fetch(`${localOrigin}/api/sessions/missing/cancel`, {
+          method: "POST",
+          headers: defaultForwarded,
+        })
+      ).status,
+    ).toBe(400);
   });
 
   test("exchanges the launch query for a cookie and never emits token-bearing resource URLs", async () => {
