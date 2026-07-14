@@ -1,11 +1,11 @@
 ---
 name: nano-banana
-description: Generates AI images using the nano-banana CLI (Gemini 3.1 Flash default, Pro available). Handles multi-resolution (512-4K), aspect ratios, reference images for style transfer, green screen workflow for transparent assets, cost tracking, and exact dimension control. Use when asked to "generate an image", "create a sprite", "make an asset", "generate artwork", or any image generation task for UI mockups, game assets, videos, or marketing materials.
+description: Generates images with the local nano-banana CLI or review Workbench. Gemini Flash is the default; Lite and Pro are available. Use the one-shot CLI for a single direct result, or the Workbench for variants, style comparison, review, durable history, and export.
 ---
 
 # nano-banana
 
-AI image generation CLI. Default model: Gemini 3.1 Flash Image Preview (Nano Banana 2).
+AI image generation CLI. Default model: `gemini-3.1-flash-image` (Nano Banana 2).
 
 ## /init - First-Time Setup
 
@@ -43,8 +43,12 @@ Get a Gemini API key at: https://aistudio.google.com/apikey
 
 ## Quick Reference
 
-- Command: `nano-banana "prompt" [options]`
-- Default: 1K resolution, Flash model, current directory
+- One-shot CLI: `nano-banana "prompt" [options]`
+- Review Workbench: `nano-banana workbench`
+- Use the CLI for one direct result. Use the Workbench for variants,
+  comparison, native-size review, winner selection, history, and export.
+- Read `docs/style-recipes.md` only when authoring or changing recipes.
+- Default CLI output: 1K, Flash model, current directory.
 
 ## Core Options
 
@@ -53,7 +57,7 @@ Get a Gemini API key at: https://aistudio.google.com/apikey
 | `-o, --output` | `nano-gen-{timestamp}` | Output filename (no extension) |
 | `-s, --size` | `1K` | Image size: `512`, `1K`, `2K`, or `4K` |
 | `-a, --aspect` | model default | Aspect ratio: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, etc. |
-| `-m, --model` | `flash` | Model: `flash`/`nb2`, `pro`/`nb-pro`, or any model ID |
+| `-m, --model` | `flash` | Model: `flash`/`nb2`, `lite`/`nb2-lite`, `pro`/`nb-pro`, or any model ID |
 | `-d, --dir` | current directory | Output directory |
 | `-r, --ref` | - | Reference image (can use multiple times) |
 | `-t, --transparent` | - | Generate on green screen, remove background (FFmpeg) |
@@ -64,8 +68,9 @@ Get a Gemini API key at: https://aistudio.google.com/apikey
 
 | Alias | Model | Use When |
 |-------|-------|----------|
-| `flash`, `nb2` | Gemini 3.1 Flash | Default. Fast, cheap (~$0.067/1K image) |
-| `pro`, `nb-pro` | Gemini 3 Pro | Highest quality needed (~$0.134/1K image) |
+| `flash`, `nb2` | `gemini-3.1-flash-image` | Default; supports 512-4K |
+| `lite`, `nb2-lite` | `gemini-3.1-flash-lite-image` | Cheapest; 1K only, no Search grounding |
+| `pro`, `nb-pro` | `gemini-3-pro-image` | Highest quality; 1K-4K |
 
 ## Sizes
 
@@ -73,8 +78,8 @@ Get a Gemini API key at: https://aistudio.google.com/apikey
 |------|-------------|------------|
 | `512` | ~$0.045 | Flash only |
 | `1K` | ~$0.067 | ~$0.134 |
-| `2K` | ~$0.101 | ~$0.201 |
-| `4K` | ~$0.151 | ~$0.302 |
+| `2K` | ~$0.101 | ~$0.134 |
+| `4K` | ~$0.151 | ~$0.24 |
 
 ## Aspect Ratios
 
@@ -100,7 +105,14 @@ nano-banana "your prompt"
 
 # Pro (highest quality)
 nano-banana "detailed portrait" --model pro -s 2K
+
+# Lite (1K only; Search is disabled because the model does not support it)
+nano-banana "cheap 1K concept" --model lite -s 1K
 ```
+
+The CLI rejects unsupported known model/size/aspect combinations before
+generation. In particular, Lite cannot be used at 512, 2K, or 4K and never
+receives a Search-grounding tool.
 
 ### Reference Images (Style Transfer / Editing)
 
@@ -119,30 +131,21 @@ nano-banana "robot mascot character" -t -o mascot
 nano-banana "pixel art treasure chest" -t -o chest
 ```
 
-The `-t` flag automatically prompts the AI to generate on a green screen, then uses FFmpeg `colorkey` + `despill` to key out the background and remove green spill from edge pixels. Pixel-perfect transparency with no manual prompting needed.
+The `-t` flag asks for a green background, then uses FFmpeg `colorkey` and
+`despill` to remove that background locally. Inspect edge quality before use.
 
 Requires: `brew install ffmpeg imagemagick`
-
-### Exact Dimensions
-
-To get a specific output dimension:
-1. First `-r` flag: your reference/style image
-2. Last `-r` flag: blank image in target dimensions
-3. Include dimensions in prompt
-
-```bash
-nano-banana "pixel art character in style of first image, 256x256" -r style.png -r blank-256x256.png -o sprite
-```
 
 ## Reference Order Matters
 
 - First reference: primary style/content source
 - Additional references: secondary influences
-- Last reference: controls output dimensions (if using blank image trick)
+- Later references remain later in the provider request; resolution is controlled only by `--size`
 
 ## Cost Tracking
 
-Every generation is logged to `~/.nano-banana/costs.json`. View summary:
+Every generation is logged to `~/.nano-banana/costs.json`. The summary includes
+per-model counts and totals:
 
 ```bash
 nano-banana --costs

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "custom",
+  "version": 1,
+  "name": "Custom",
+  "description": "Use the subject field as the complete prompt with no style contract.",
+  "kind": "custom",
+  "comparable": false,
+  "promptTemplate": "{{subject}}",
+  "preview": {
+    "type": "generic"
+  },
+  "export": {
+    "type": "raw-only"
+  }
+}

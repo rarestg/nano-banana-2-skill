@@ -1,237 +1,211 @@
-# Nano Banana 2 Skill
+# Nano Banana 2
 
-AI image generation CLI powered by Gemini 3.1 Flash Image Preview (default) with support for Gemini 3 Pro and any Gemini model. Multi-resolution (512-4K), aspect ratios, cost tracking, broadcast-grade green screen transparency, reference images, and style transfer.
-
-Also ships as a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill for AI-assisted image generation workflows.
+Local image-generation CLI and review workbench backed by the Gemini API. The
+workbench adds repeatable style recipes, bounded variant generation, native-size
+review, durable manifests, and production export without putting the API key in
+the browser.
 
 ## Install
 
-**Requirements:** [Bun](https://bun.sh), [FFmpeg](https://ffmpeg.org) + [ImageMagick](https://imagemagick.org) (for transparent mode)
+Requirements: [Bun](https://bun.sh),
+[FFmpeg](https://ffmpeg.org), and
+[ImageMagick](https://imagemagick.org). ImageMagick may provide either the
+`magick` or `convert` command.
 
 ```bash
-# Clone the repo
 git clone https://github.com/kingbootoshi/nano-banana-2-skill.git ~/tools/nano-banana-2
 cd ~/tools/nano-banana-2
-
-# Install dependencies
 bun install
-
-# Link globally (no sudo needed - uses Bun's global bin)
 bun link
 
-# Set up your API key
 mkdir -p ~/.nano-banana
 echo "GEMINI_API_KEY=your_key_here" > ~/.nano-banana/.env
 ```
 
-Get a Gemini API key at [Google AI Studio](https://aistudio.google.com/apikey).
+Get a key from [Google AI Studio](https://aistudio.google.com/apikey).
 
-Now you can use `nano-banana` from anywhere.
+## Workbench
 
-### As a Claude Code Skill
-
-When installed as a Claude Code skill, just say `/init` and Claude will clone the repo, install deps, and link the command for you. Then use it by saying "generate an image of..." and Claude handles the rest.
-
-### Fallback (if `bun link` doesn't work)
+Start the loopback-only server:
 
 ```bash
-mkdir -p ~/.local/bin
-ln -sf ~/tools/nano-banana-2/src/cli.ts ~/.local/bin/nano-banana
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+nano-banana workbench
 ```
 
-## Usage
+The command prints a launch URL containing a random token. Open that exact URL
+once. The server exchanges the query token for an HttpOnly, SameSite cookie and
+redirects to a clean URL; API, static, and image requests then use the cookie and
+do not repeat the token. The browser receives only whether an API key is
+configured, never the key itself.
+
+The default workflow creates four independent variants with at most two calls
+running concurrently. Choose one recipe, or compare two to three Folio recipes.
+Comparison calls are interleaved round-robin and share the same subject,
+provider settings, and ordered reference bytes.
+
+Built-in recipes:
+
+- Folio geometric isometric: current production direction.
+- Folio flat cut-paper.
+- Folio restrained screenprint.
+- Custom: the subject field is the complete prompt, with no style contract.
+
+The Workbench exposes only verified settings:
+
+- Exact supported model IDs.
+- Model-supported output resolutions and aspect ratios.
+- Ordered PNG, JPEG, WebP, or GIF references.
+- Google Search grounding under Advanced; off by default.
+
+A run requires explicit confirmation above eight calls or an estimated $1.
+Estimates use the published per-image price for the selected model and
+resolution. They exclude possible Search charges. Manifest costs use
+provider-reported usage; when output modality is unknown, they are labeled as a
+conservative upper estimate and charged at the highest applicable output rate.
+They are not invoices.
+
+### Output and history
+
+Sessions are stored under:
+
+```text
+~/.nano-banana/workbench/sessions/YYYY-MM-DD/<session-id>/
+```
+
+Every session preserves recipe snapshots, exact rendered prompts, settings,
+ordered reference copies and hashes, candidate states, raw images and hashes,
+reported usage, calculated or upper-bound cost, selection, and exports. Regeneration creates a
+new session linked with `derivedFromSessionId`; references can be copied from the
+parent byte-for-byte.
+
+Folio project-icon exports contain:
+
+- A byte-identical copy of the selected raw image.
+- A losslessly compressed 384×384 true-color RGBA PNG.
+- Transparent pixels outside the circular field.
+- The session manifest and copied references.
+
+The production conversion performs Lanczos resizing, a circular alpha mask,
+metadata stripping, and PNG compression. It does not recolor, quantize, redraw,
+or otherwise reinterpret the image.
+
+### Cancellation
+
+Queued calls cancel without being submitted. For an in-flight call, the SDK's
+`AbortSignal` stops the local wait, but Google warns that the service operation
+may continue and remain billable. The manifest therefore records billing as
+`unknown-may-be-charged` unless provider usage is returned.
+
+### exe.dev access
+
+Loopback is the safe default. To open the workbench through this VM's private,
+authenticated exe.dev HTTPS proxy, opt into a non-loopback listener on a port in
+the documented range:
 
 ```bash
-# Basic - generates 1K image to current directory
+nano-banana workbench --host 0.0.0.0 --port 4173
+```
+
+Replace the host in the printed launch URL with the VM's
+`https://<vm-name>.exe.xyz:4173/` address and retain the `?token=...` query for
+that first request. The redirect removes it immediately.
+Keep the exe.dev proxy private. Proxy authentication supplements the launch
+token; it does not replace it. Mutating requests require the full expected
+origin—scheme and host. Behind exe.dev, the documented `X-Forwarded-Host` and
+`X-Forwarded-Proto` headers establish that HTTPS origin. See the
+[exe.dev proxy documentation](https://exe.dev/docs/proxy).
+
+## Style recipes
+
+Recipes are provider-neutral JSON files in `recipes/`. They separate a reusable
+style contract from the subject brief and also describe review/export behavior.
+See [docs/style-recipes.md](docs/style-recipes.md) before editing or adding one.
+
+Exact prompt text and settings reproduce the request and its lineage. Gemini
+does not expose a seed for these image calls, so they do not guarantee identical
+pixels on a later run.
+
+## CLI
+
+The original direct-generation interface remains available:
+
+```bash
 nano-banana "minimal dashboard UI with dark theme"
-
-# Custom output name
-nano-banana "luxury product mockup" -o product
-
-# Higher resolution
-nano-banana "detailed landscape painting" -s 2K
-
-# Ultra high res
-nano-banana "cinematic widescreen scene" -s 4K -a 16:9
-
-# Lower resolution (fast, cheap)
-nano-banana "quick sketch concept" -s 512
-
-# Custom output directory
-nano-banana "UI screenshot" -o dashboard -d ~/Pictures
+nano-banana "quick square concept" --size 512 --aspect 1:1
+nano-banana "edit this image" --ref input.png --output edited
+nano-banana "high-detail asset" --model pro --size 2K
 ```
 
-### Models
-
-```bash
-# Default - Nano Banana 2 (Gemini 3.1 Flash, fast and cheap)
-nano-banana "your prompt"
-
-# Pro - highest quality, 2x cost
-nano-banana "your prompt" --model pro
-
-# Any model ID
-nano-banana "your prompt" --model gemini-2.5-flash-image
-```
-
-| Alias | Model | Best For |
-|-------|-------|----------|
-| `flash`, `nb2` | Gemini 3.1 Flash Image Preview | Speed, cost, high-volume |
-| `pro`, `nb-pro` | Gemini 3 Pro Image Preview | Highest quality, complex composition |
-
-### Aspect Ratios
-
-```bash
-# Widescreen
-nano-banana "cinematic landscape" -a 16:9
-
-# Portrait
-nano-banana "mobile app screenshot" -a 9:16
-
-# Ultra-wide
-nano-banana "panoramic scene" -a 21:9
-
-# Standard photo
-nano-banana "product photo" -a 4:3
-```
-
-Supported: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `4:5`, `5:4`, `21:9`
-
-### Reference Images
-
-Edit, transform, or combine existing images:
-
-```bash
-# Edit an existing image
-nano-banana "change the background to pure white" -r dark-ui.png -o light-ui
-
-# Style transfer - multiple references
-nano-banana "combine these two UI styles into one" -r style1.png -r style2.png -o combined
-
-# Color correction
-nano-banana "make this image more vibrant and increase contrast" -r photo.jpg
-```
-
-### Transparent Assets
-
-Generate assets with transparent backgrounds using AI-powered background removal:
-
-```bash
-# Basic transparent asset
-nano-banana "robot mascot character" -t -o mascot
-
-# Logo with transparency
-nano-banana "minimalist tech logo" -t -o logo
-
-# Game asset
-nano-banana "pixel art treasure chest" -t -o chest
-```
-
-The `-t` flag automatically prompts the AI to generate on a green screen, then uses FFmpeg `colorkey` + `despill` to key out the background and remove green spill from edge pixels. ImageMagick trims the result. Requires: `brew install ffmpeg imagemagick`
-
-### Exact Dimensions
-
-Control output dimensions by using a blank image as the last reference:
-
-```bash
-# First -r: your style reference
-# Last -r: blank image in target dimensions
-nano-banana "pixel art character, 256x256" -r style.png -r blank-256x256.png -o sprite
-```
-
-## Options
+Options:
 
 | Option | Default | Description |
-|--------|---------|-------------|
-| `-o, --output` | `nano-gen-{timestamp}` | Output filename (no extension) |
-| `-s, --size` | `1K` | Image size: `512`, `1K`, `2K`, or `4K` |
-| `-a, --aspect` | model default | Aspect ratio: `1:1`, `16:9`, `9:16`, etc. |
-| `-m, --model` | `flash` | Model: `flash`/`nb2`, `pro`/`nb-pro`, or any model ID |
+| --- | --- | --- |
+| `-o, --output` | timestamped | Filename without extension |
+| `-s, --size` | `1K` | `512`, `1K`, `2K`, or `4K` |
+| `-a, --aspect` | model default | Supported aspect ratio |
+| `-m, --model` | `flash` | Alias or exact model ID |
 | `-d, --dir` | current directory | Output directory |
-| `-r, --ref` | - | Reference image (can use multiple times) |
-| `-t, --transparent` | - | Generate on green screen, remove background (FFmpeg) |
-| `--api-key` | - | Gemini API key (overrides env/file) |
-| `--costs` | - | Show cost summary from generation history |
-| `-h, --help` | - | Show help |
+| `-r, --ref` | none | Ordered reference; repeatable |
+| `-t, --transparent` | off | Green-screen generation and local removal |
+| `--api-key` | resolved | Explicit API-key override |
+| `--costs` | none | Show legacy CLI cost history |
 
-## Sizes and Costs
+The direct CLI retains its historical Search-grounding behavior for models that
+support it. Lite is validated as 1K-only and runs without Search; unsupported
+known model/size/aspect combinations are rejected before key resolution. The
+Workbench defaults Search off and records its value in each manifest.
 
-| Size | Resolution | Flash Cost | Pro Cost |
-|------|-----------|------------|----------|
-| `512` | ~512x512 | ~$0.045 | N/A (Flash only) |
-| `1K` | ~1024x1024 | ~$0.067 | ~$0.134 |
-| `2K` | ~2048x2048 | ~$0.101 | ~$0.201 |
-| `4K` | ~4096x4096 | ~$0.151 | ~$0.302 |
+### Models and pricing
 
-## Cost Tracking
+| Alias | Exact model ID | Supported sizes | Approximate image output |
+| --- | --- | --- | --- |
+| `flash`, `nb2` | `gemini-3.1-flash-image` | 512, 1K, 2K, 4K | $0.045, $0.067, $0.101, $0.151 |
+| `lite`, `nb2-lite` | `gemini-3.1-flash-lite-image` | 1K only | $0.0336 |
+| `pro`, `nb-pro` | `gemini-3-pro-image` | 1K, 2K, 4K | $0.134, $0.134, $0.24 |
 
-Every generation logs its cost to `~/.nano-banana/costs.json`. View your spending:
+These are current standard paid-tier image-output equivalents. Prompt, text,
+thinking, and Search usage can add cost. Verify the
+[official pricing](https://ai.google.dev/gemini-api/docs/pricing) before relying
+on the figures for a budget.
+
+Nano Banana 2 Lite is cheaper at 1K, but it does not support 512 or Search
+grounding. The 512 workbench default therefore uses
+`gemini-3.1-flash-image`; model names are never inferred or silently aliased.
+
+### Green-screen transparency
+
+`--transparent` asks the model for a flat green background, detects the corner
+key color with ImageMagick, removes it with FFmpeg `colorkey` and `despill`, then
+trims transparent padding. This is local post-processing, not native transparent
+provider output.
+
+### API-key resolution
+
+Both interfaces resolve the key in this order:
+
+1. CLI `--api-key` when applicable.
+2. `GEMINI_API_KEY` environment variable.
+3. `.env` in the current directory.
+4. `.env` in this repository.
+5. `~/.nano-banana/.env`.
+
+## Development
 
 ```bash
-nano-banana --costs
+bun install
+bun run check
 ```
 
-Shows total generations, total spend, and per-model breakdown.
+`bun run check` verifies formatting, lint, TypeScript, tests, a Bun build, and a
+built-workbench launch from outside the repository. Browser tests cover cookie
+auth and selectable-card geometry. Tests force API-key discovery off and use
+injected/mock generation; they do not spend API credits.
 
-## API Key Configuration
-
-The CLI resolves the Gemini API key in priority order:
-
-1. `--api-key` flag on the command line
-2. `GEMINI_API_KEY` environment variable
-3. `.env` file in the current working directory
-4. `.env` file in the repo root (next to `src/`)
-5. `~/.nano-banana/.env`
-
-Get a free key at [Google AI Studio](https://aistudio.google.com/apikey).
+To inspect the UI without making provider calls:
 
 ```bash
-# Option 1: Environment variable
-export GEMINI_API_KEY=your_key_here
-
-# Option 2: .env file in current directory
-echo "GEMINI_API_KEY=your_key_here" > .env
-
-# Option 3: Global config
-mkdir -p ~/.nano-banana
-echo "GEMINI_API_KEY=your_key_here" > ~/.nano-banana/.env
-
-# Option 4: Pass directly
-nano-banana "your prompt" --api-key your_key_here
+NANO_BANANA_WORKBENCH_MOCK=1 nano-banana workbench
 ```
-
-## How Transparent Mode Works
-
-The `-t` flag uses a 3-step pipeline for pixel-perfect transparency:
-
-1. **Green screen prompt** - The CLI automatically appends green screen instructions to your prompt, so the AI generates on a solid green background
-2. **FFmpeg colorkey + despill** - `colorkey` removes the green background. `despill` reconstructs edge pixel colors by mathematically removing green contamination from the RGB channels - this is why edges are clean instead of having green fringe
-3. **Auto-crop** - ImageMagick trims transparent padding and resets canvas
-
-The key color is auto-detected from corner pixels (the AI generates near-green like `#05F904`, not exact `#00FF00`). Requires FFmpeg and ImageMagick: `brew install ffmpeg imagemagick`
-
-## Use Cases
-
-- **Landing page assets** - product mockups, UI previews
-- **Image editing** - transform existing images with text prompts
-- **Style transfer** - combine multiple reference images
-- **Marketing materials** - hero images, feature illustrations
-- **UI iterations** - quickly generate design variations
-- **Transparent assets** - icons, logos, mascots with no background
-- **Game assets** - sprites, tilesets, characters
-- **Video production** - visual elements for Remotion/video compositions
-
-## Claude Code Skill
-
-When installed as a Claude Code plugin, the skill triggers on phrases like:
-- "generate an image"
-- "create a sprite"
-- "make an asset"
-- "generate artwork"
-
-Claude will construct the appropriate `nano-banana` command based on your request, handling model selection, resolution, aspect ratio, reference images, transparency, and output configuration automatically.
 
 ## License
 

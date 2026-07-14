@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Nano Banana Workbench</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Nano Banana 2</p>
+        <h1>Image workbench</h1>
+      </div>
+      <div class="topbar-actions">
+        <span id="key-status" class="status-pill">Checking key…</span>
+        <button id="theme-toggle" class="quiet" type="button">Toggle theme</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <aside class="history-panel">
+        <div class="section-heading">
+          <h2>History</h2>
+          <button id="history-refresh" class="quiet" type="button">Refresh</button>
+        </div>
+        <div id="history-list" class="history-list" aria-live="polite"></div>
+      </aside>
+
+      <section class="workspace">
+        <form id="generation-form" class="editor">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">New immutable session</p>
+              <h2>Prompt and style</h2>
+            </div>
+            <span id="derived-label" class="muted"></span>
+          </div>
+
+          <fieldset>
+            <legend>Recipe</legend>
+            <p class="hint">Choose one, or compare two to three Folio styles fairly.</p>
+            <div id="recipe-options" class="recipe-grid"></div>
+          </fieldset>
+
+          <label class="field">
+            <span>Prompt / subject brief <small id="subject-count">0</small></span>
+            <textarea id="subject" name="subject" rows="6" maxlength="12000" required placeholder="Describe what to generate. For Custom, this is the complete prompt."></textarea>
+          </label>
+
+          <fieldset>
+            <legend>Reference images</legend>
+            <p class="hint">Order is preserved in the request and manifest.</p>
+            <input id="references" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
+            <ol id="reference-list" class="reference-list"></ol>
+          </fieldset>
+
+          <div class="settings-grid">
+            <label class="field"><span>Model</span><select id="model"></select></label>
+            <label class="field"><span>Resolution</span><select id="size"></select></label>
+            <label class="field"><span>Aspect</span><select id="aspect"></select></label>
+            <label class="field"><span>Variants per style</span><input id="variants" type="number" min="1" max="8" value="4" /></label>
+          </div>
+
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <label class="checkbox-row">
+              <input id="google-search" type="checkbox" />
+              <span>Google Search grounding <small>Off by default; may add separate search charges.</small></span>
+            </label>
+          </details>
+
+          <div class="estimate-row">
+            <div>
+              <strong id="call-estimate">4 calls</strong>
+              <span id="cost-estimate" class="muted">Estimate unavailable</span>
+            </div>
+            <label id="confirmation-row" class="checkbox-row hidden">
+              <input id="confirmation" type="checkbox" />
+              <span>I confirm this run exceeds the safety threshold.</span>
+            </label>
+            <button id="generate-button" class="primary" type="submit">Generate</button>
+          </div>
+          <p id="key-guidance" class="key-guidance hidden"></p>
+          <p id="form-error" class="error" role="alert"></p>
+        </form>
+
+        <section id="session-view" class="session-view hidden">
+          <div class="section-heading">
+            <div>
+              <p id="session-meta" class="eyebrow"></p>
+              <h2 id="session-title">Candidates</h2>
+            </div>
+            <div class="session-actions">
+              <button id="regenerate" class="quiet" type="button">Regenerate from this</button>
+              <button id="cancel" class="danger" type="button">Cancel remaining</button>
+            </div>
+          </div>
+          <div id="progress" class="progress" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div id="candidate-groups"></div>
+          <div id="export-history" class="export-history"></div>
+          <p id="session-message" class="notice" role="status" aria-live="polite"></p>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
