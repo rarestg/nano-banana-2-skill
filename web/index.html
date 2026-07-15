@@ -17,11 +17,12 @@
         </div>
       </div>
       <div class="topbar-actions">
-        <span id="key-status" class="status-pill">Checking key…</span>
+        <span id="key-status" class="status-pill"><span class="status-dot" aria-hidden="true"></span><span class="key-status-label">Checking key…</span></span>
         <div class="spend-wrap">
           <button id="spend-toggle" class="status-pill spend-pill" type="button" aria-expanded="false" aria-controls="spend-breakdown" hidden>
             <span class="spend-caption">All runs</span>
             <strong id="spend-total">Unavailable</strong>
+            <span class="spend-caret" aria-hidden="true">▾</span>
           </button>
           <section id="spend-breakdown" class="spend-breakdown" aria-label="All stored runs spend breakdown" hidden></section>
         </div>
@@ -34,7 +35,7 @@
 
     <main class="shell">
       <aside id="history-panel" class="history-panel" aria-label="Generation history">
-        <button id="history-toggle" class="history-toggle" type="button" aria-expanded="false" aria-controls="history-drawer">
+        <button id="history-toggle" class="history-toggle" type="button" aria-expanded="false" aria-controls="history-drawer" title="Show history">
           <span class="history-toggle-icon" aria-hidden="true">☷</span>
           <span class="history-toggle-label">Show history</span>
         </button>
@@ -44,6 +45,10 @@
             <button id="history-refresh" class="quiet" type="button">Refresh</button>
           </div>
           <div id="history-list" class="history-list" aria-live="polite"></div>
+          <div class="history-clear-row">
+            <button id="history-clear" class="danger" type="button" disabled>Clear history</button>
+            <p id="history-clear-status" class="field-feedback" role="status" aria-live="polite"></p>
+          </div>
         </div>
       </aside>
 
@@ -55,7 +60,7 @@
               <span id="summary-subject" class="muted">Add a subject brief</span>
             </div>
             <dl id="summary-settings"></dl>
-            <button id="edit-setup" class="quiet" type="button">Edit setup</button>
+            <button id="edit-setup" class="quiet" type="button" disabled>Edit setup</button>
           </div>
 
           <div class="editor-fields">
@@ -123,10 +128,11 @@
             <div>
               <p id="session-meta" class="metadata"></p>
               <h2 id="session-title" tabindex="-1">Candidates</h2>
+              <p id="session-subtitle" class="session-subtitle" hidden></p>
             </div>
             <div class="session-actions">
-              <button id="regenerate" class="quiet" type="button">Edit and regenerate</button>
-              <button id="cancel" class="danger" type="button">Cancel remaining</button>
+              <button id="regenerate" class="quiet" type="button" disabled>Edit and regenerate</button>
+              <button id="cancel" class="danger" type="button" disabled hidden>Cancel remaining</button>
             </div>
           </div>
           <div id="progress" class="progress" role="status" aria-live="polite" aria-atomic="true"></div>

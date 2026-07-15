@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, readdir, rm, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { runCommand } from "../src/image-tools";
 import {
+  hashForTest,
   MAX_REFERENCE_BYTES,
   SessionStore,
   WorkbenchError,
-  hashForTest,
 } from "../src/workbench/store";
 import { pngBytes, sessionInput, svgResult, temporaryStore } from "./helpers";
 
@@ -213,8 +214,31 @@ describe("durable sessions", () => {
       "interrupted",
       "interrupted",
     ]);
+    expect(recovered.status).toBe("interrupted");
+    expect(
+      (await restarted.listHistory()).find((session) => session.id === created.id)?.status,
+    ).toBe("interrupted");
     expect(recovered.arms[0].candidates[0].cancellation?.billing).toBe("unknown-may-be-charged");
     expect(recovered.arms[0].candidates[1].cancellation).toBeUndefined();
+  });
+
+  test("keeps successful interrupted runs partial and fully cancelled runs cancelled", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const partial = await store.createSession(sessionInput({ variantsPerRecipe: 2 }));
+    const partialResult = await store.updateSession(partial.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[1].status = "interrupted";
+    });
+    expect(partialResult.status).toBe("partial");
+
+    const cancelled = await store.createSession(sessionInput({ variantsPerRecipe: 2 }));
+    const cancelledResult = await store.updateSession(cancelled.id, (manifest) => {
+      for (const candidate of manifest.arms[0].candidates) {
+        candidate.status = "cancel-requested";
+      }
+    });
+    expect(cancelledResult.status).toBe("cancelled");
   });
 
   test("atomically persists state and exports byte-identical raw plus circular-alpha RGBA PNG", async () => {
@@ -421,6 +445,86 @@ describe("durable sessions", () => {
     expect(persisted.exports).toEqual([]);
   });
 
+  test("clears all sessions with their generated and exported files and stays usable", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    expect(await store.clearAllSessions()).toEqual({ cleared: 0 });
+
+    const created = await store.createSession(
+      sessionInput({
+        variantsPerRecipe: 1,
+        references: [{ name: "style.png", mimeType: "image/png", bytes: pngBytes() }],
+      }),
+    );
+    const images = await store.saveCandidateImages(created.id, "candidate-1-1", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
+    await store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    const exported = await store.exportCandidate(created.id, "candidate-1-1");
+    const sessionDirectory = store.sessionDirectory(created.id);
+    const generatedPath = store.pathInSession(created.id, images[0].path);
+    const exportedRawPath = store.pathInSession(created.id, exported.export.raw.path);
+    expect(existsSync(generatedPath)).toBe(true);
+    expect(existsSync(exportedRawPath)).toBe(true);
+    expect((await store.listHistory()).length).toBe(1);
+
+    expect(await store.clearAllSessions()).toEqual({ cleared: 1 });
+    expect(await store.listHistory()).toEqual([]);
+    expect(existsSync(sessionDirectory)).toBe(false);
+    expect(existsSync(generatedPath)).toBe(false);
+    expect(existsSync(exportedRawPath)).toBe(false);
+    expect(existsSync(store.sessionsRoot)).toBe(true);
+
+    const after = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    expect((await store.readSession(after.id)).id).toBe(after.id);
+    expect((await store.listHistory()).map((item) => item.id)).toEqual([after.id]);
+  }, 15_000);
+
+  test("recreates a missing sessions root when clearing", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    await rm(store.sessionsRoot, { recursive: true, force: true });
+    expect(await store.clearAllSessions()).toEqual({ cleared: 0 });
+    expect(existsSync(store.sessionsRoot)).toBe(true);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    expect((await store.readSession(created.id)).id).toBe(created.id);
+  });
+
+  test("refuses to clear history through a symlinked sessions root", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    await rm(store.sessionsRoot, { recursive: true, force: true });
+    await symlink("/tmp", store.sessionsRoot);
+    await expect(store.clearAllSessions()).rejects.toMatchObject({ code: "unsafe_storage_path" });
+    expect(existsSync("/tmp")).toBe(true);
+  });
+
+  test("reports corrupt history and still clears its physical session", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    await writeFile(store.pathInSession(created.id, "manifest.json"), "{}");
+    const restarted = new SessionStore(root);
+    await restarted.initialize();
+
+    await expect(restarted.listHistory()).rejects.toMatchObject({ code: "history_read_failed" });
+    expect(await restarted.clearAllSessions()).toEqual({ cleared: 1 });
+    expect(existsSync(restarted.sessionDirectory(created.id))).toBe(false);
+  });
+
+  test("maps ordinary clear preflight I/O errors without masking safety refusals", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    await rm(store.sessionsRoot, { recursive: true, force: true });
+    await writeFile(store.sessionsRoot, "not a directory");
+
+    await expect(store.clearAllSessions()).rejects.toMatchObject({ code: "history_clear_failed" });
+  });
+
   test("history reports successful image count and complete calculated spend", async () => {
     const { root, store } = await temporaryStore();
     roots.push(root);
@@ -448,6 +552,7 @@ describe("durable sessions", () => {
       upperBoundCount: 0,
       unavailableCount: 0,
       unknownMayBeChargedCount: 0,
+      unknownGroundingChargeCount: 0,
     });
   });
 
@@ -528,7 +633,7 @@ describe("durable sessions", () => {
       calculated.status = "failed";
       calculated.cost = { status: "calculated", usd: 0.1, excludesGrounding: false };
       upperBound.status = "failed";
-      upperBound.cost = { status: "upper-bound", usd: 0.2, excludesGrounding: true };
+      upperBound.cost = { status: "upper-bound", usd: 0.2, excludesGrounding: false };
     });
 
     const summary = (await store.listHistory()).find((item) => item.id === created.id);
@@ -541,7 +646,62 @@ describe("durable sessions", () => {
       upperBoundCount: 1,
       unavailableCount: 0,
       unknownMayBeChargedCount: 0,
+      unknownGroundingChargeCount: 0,
     });
+  });
+
+  test("history preserves a grounded image subtotal but marks grounding charges unknown", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(
+      sessionInput({ googleSearch: true, variantsPerRecipe: 1 }),
+    );
+    await store.updateSession(created.id, (manifest) => {
+      const candidate = manifest.arms[0].candidates[0];
+      candidate.status = "failed";
+      candidate.cost = { status: "calculated", usd: 0.1, excludesGrounding: true };
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.spend).toEqual({
+      status: "partial",
+      calculatedUsd: 0.1,
+      upperBoundUsd: undefined,
+      calculatedCount: 1,
+      upperBoundCount: 0,
+      unavailableCount: 0,
+      unknownMayBeChargedCount: 0,
+      unknownGroundingChargeCount: 1,
+    });
+  });
+
+  test("rejects grounded stored costs that claim to include grounding", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(
+      sessionInput({ googleSearch: true, variantsPerRecipe: 1 }),
+    );
+    await store.updateSession(created.id, (manifest) => {
+      const candidate = manifest.arms[0].candidates[0];
+      candidate.status = "failed";
+      candidate.cost = { status: "calculated", usd: 0.1, excludesGrounding: false };
+    });
+
+    await expect(store.listHistory()).rejects.toMatchObject({ code: "history_read_failed" });
+  });
+
+  test("rejects non-grounded stored costs that claim grounding was excluded", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    await store.updateSession(created.id, (manifest) => {
+      const candidate = manifest.arms[0].candidates[0];
+      candidate.status = "failed";
+      candidate.cost = { status: "calculated", usd: 0.1, excludesGrounding: true };
+    });
+
+    await expect(store.listHistory()).rejects.toMatchObject({ code: "history_read_failed" });
   });
 
   test("history marks a known subtotal partial when another call has unknown cost", async () => {

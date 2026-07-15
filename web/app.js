@@ -9,6 +9,12 @@ const state = {
   focusedCandidateId: undefined,
   exportSelectedIds: new Set(),
   exporting: false,
+  historyCount: 0,
+  historyUnavailable: false,
+  epoch: 0,
+  sessionLoadIntent: 0,
+  historyLoadIntent: 0,
+  pollError: undefined,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -20,6 +26,36 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function setText(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+const focusAttributes = [
+  "data-focus-candidate",
+  "data-export-select",
+  "data-primary",
+  "data-clear-primary",
+  "data-export",
+  "data-export-selected",
+  "data-terminal-recovery",
+];
+
+function captureFocus(root) {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) return undefined;
+  if (active.id) return `#${CSS.escape(active.id)}`;
+  for (const attribute of focusAttributes) {
+    if (!active.hasAttribute(attribute)) continue;
+    const value = active.getAttribute(attribute);
+    return value === "" ? `[${attribute}]` : `[${attribute}="${CSS.escape(value)}"]`;
+  }
+}
+
+function restoreFocus(root, selector) {
+  if (!selector) return;
+  root.querySelector(selector)?.focus({ preventScroll: true });
 }
 
 async function api(path, options = {}) {
@@ -205,12 +241,67 @@ function candidateExportReady(arm, candidate) {
   return candidate.images[0]?.width === candidate.images[0]?.height;
 }
 
-function candidateMessages(arm, candidate) {
+function providerFailureMessage(raw) {
+  const message = String(raw ?? "").toLowerCase();
+  if (
+    /(?:code|status|http)[^a-z0-9]{0,8}429|too many requests|rate limit exceeded|resource_exhausted/.test(
+      message,
+    )
+  ) {
+    return "The provider rate limit was reached. Edit the setup and regenerate in a moment.";
+  }
+  if (
+    /(?:code|status|http)[^a-z0-9]{0,8}(?:401|403)|unauthenticated|invalid api key|api key not valid|permission_denied/.test(
+      message,
+    )
+  ) {
+    return "The provider rejected the credentials. Check GEMINI_API_KEY, then edit the setup and regenerate.";
+  }
+  if (/finish_reason.?safety|blocked_reason|prompt was blocked|safety settings/.test(message)) {
+    return "The provider blocked this request. Edit the subject or references and regenerate.";
+  }
+  if (
+    /fetch failed|network error|econn|etimedout|timed out|connection (?:refused|reset)/.test(
+      message,
+    )
+  ) {
+    return "The provider could not be reached. Check the connection, then edit the setup and regenerate.";
+  }
+  if (message.includes("provider returned no image")) {
+    return "The provider returned no image. Edit the setup and regenerate the run.";
+  }
+  return "This candidate could not be generated. Edit the setup and regenerate the run.";
+}
+
+function candidateFailureMessage(candidate) {
+  const error = String(candidate.error ?? "");
+  if (
+    candidate.status === "interrupted" &&
+    error === "Workbench stopped before this call completed."
+  ) {
+    return "The workbench stopped before this call completed. Edit the setup and regenerate the run.";
+  }
+  if (
+    candidate.status === "interrupted" &&
+    error === "Workbench stopped before this call was submitted."
+  ) {
+    return "The workbench stopped before this call was submitted. Edit the setup and regenerate the run.";
+  }
+  if (
+    candidate.status === "cancel-requested" &&
+    error === "Generation stopped locally after cancellation was requested."
+  ) {
+    return "Generation stopped on this workbench after cancellation was requested.";
+  }
+  return providerFailureMessage(error);
+}
+
+function candidateMessages(arm, candidate, includeFailureDetail = false) {
   const messages = [];
   if (candidate.cancellation?.billing === "unknown-may-be-charged") {
     messages.push("Cancellation requested; billing may still occur.");
   }
-  if (candidate.error) messages.push(candidate.error);
+  if (candidate.error && includeFailureDetail) messages.push(candidateFailureMessage(candidate));
   if (
     candidate.status === "succeeded" &&
     arm.recipe.export.type === "folio-icon" &&
@@ -221,6 +312,38 @@ function candidateMessages(arm, candidate) {
   return messages.join(" ");
 }
 
+function terminalCandidateLabel(status) {
+  return {
+    failed: "Generation failed",
+    interrupted: "Generation interrupted",
+    "cancel-requested": "Cancellation requested",
+  }[status];
+}
+
+function statusLabel(status) {
+  return (
+    {
+      queued: "Queued",
+      running: "Running",
+      succeeded: "Succeeded",
+      failed: "Failed",
+      interrupted: "Interrupted",
+      "cancel-requested": "Cancellation requested",
+      completed: "Completed",
+      partial: "Partial",
+      cancelled: "Cancelled",
+    }[status] ?? status
+  );
+}
+
+function isTerminalRecoverySession(session) {
+  const candidates = session.arms.flatMap((arm) => arm.candidates);
+  return (
+    !candidates.some((candidate) => candidate.status === "succeeded") &&
+    ["failed", "interrupted", "cancelled"].includes(session.status)
+  );
+}
+
 function renderCandidate(session, arm, candidate) {
   const identity = candidateIdentity(session, arm, candidate);
   const ready = candidate.status === "succeeded" && candidate.images.length;
@@ -229,16 +352,17 @@ function renderCandidate(session, arm, candidate) {
   const selectedForExport = state.exportSelectedIds.has(candidate.id);
   const exported = session.exports.some((record) => record.candidateId === candidate.id);
   const message = candidateMessages(arm, candidate);
+  const terminalLabel = terminalCandidateLabel(candidate.status);
   return `<article class="candidate${focused ? " focused" : ""}${primary ? " primary-candidate" : ""}" data-candidate="${candidate.id}" aria-label="${escapeHtml(identity)}">
     <div class="candidate-flags">
-      <label class="export-check"><input type="checkbox" data-export-select="${candidate.id}" ${selectedForExport ? "checked" : ""} ${candidateExportReady(arm, candidate) ? "" : "disabled"}><span class="sr-only">Select ${escapeHtml(identity)} for export</span></label>
+      <label class="export-check"><input type="checkbox" data-export-select="${candidate.id}" aria-label="Select ${escapeHtml(identity)} for bulk export" ${selectedForExport ? "checked" : ""} ${candidateExportReady(arm, candidate) ? "" : "disabled"}><span aria-hidden="true">Export</span></label>
       <span class="candidate-flag-list">${primary ? '<strong class="flag flag-primary">Primary</strong>' : ""}${exported ? '<strong class="flag flag-exported">Exported</strong>' : ""}</span>
     </div>
     <button class="candidate-focus" type="button" data-focus-candidate="${candidate.id}" aria-pressed="${focused}" aria-label="Inspect ${escapeHtml(identity)}">
-      ${ready ? `<img src="${candidateImageUrl(session.id, candidate.id)}" alt="Generated ${escapeHtml(identity)}">` : `<span class="candidate-placeholder" aria-hidden="true"></span>`}
+      ${ready ? `<img src="${candidateImageUrl(session.id, candidate.id)}" alt="Generated ${escapeHtml(identity)}">` : terminalLabel ? `<span class="candidate-placeholder terminal-placeholder${candidate.status === "failed" ? " failed-placeholder" : ""}"><strong>${terminalLabel}</strong></span>` : `<span class="candidate-placeholder" aria-hidden="true"></span>`}
       ${primary ? '<span class="primary-badge" aria-hidden="true">✓</span>' : ""}
     </button>
-    <div class="candidate-label"><strong>Variant ${candidate.variant} of ${arm.candidates.length}</strong>${candidate.status === "succeeded" ? "" : `<span>${escapeHtml(candidate.status)}</span>`}</div>
+    <div class="candidate-label"><strong>Variant ${candidate.variant} of ${arm.candidates.length}</strong>${candidate.status === "succeeded" ? "" : `<span>${escapeHtml(statusLabel(candidate.status))}</span>`}</div>
     ${message ? `<p class="candidate-message">${escapeHtml(message)}</p>` : ""}
   </article>`;
 }
@@ -290,9 +414,12 @@ function renderCandidateGroups(session, sameSession) {
       const signature = candidateSignature(session, candidate);
       const existing = grid.querySelector(`[data-candidate="${candidate.id}"]`);
       if (existing?.dataset.signature === signature) continue;
+      const focusedControl = existing ? captureFocus(existing) : undefined;
       const replacement = candidateElement(session, arm, candidate);
-      if (existing) existing.replaceWith(replacement);
-      else grid.append(replacement);
+      if (existing) {
+        existing.replaceWith(replacement);
+        restoreFocus(replacement, focusedControl);
+      } else grid.append(replacement);
     }
   }
   updateFocusedCandidateClasses();
@@ -310,6 +437,7 @@ function updateFocusedCandidateClasses() {
 
 function renderInspector(session) {
   const container = $("#candidate-inspector");
+  const focusedControl = captureFocus(container);
   const found = findCandidate(session, state.focusedCandidateId);
   if (!found) {
     container.innerHTML = '<p class="hint">Choose a candidate to inspect it.</p>';
@@ -323,7 +451,6 @@ function renderInspector(session) {
   const exportedCount = session.exports.filter(
     (record) => record.candidateId === candidate.id,
   ).length;
-  const cost = candidate.cost?.usd;
   const signature = JSON.stringify({
     candidate,
     primary,
@@ -343,15 +470,31 @@ function renderInspector(session) {
           )
           .join("")}</div></details>`
       : "";
-  const message = candidateMessages(arm, candidate);
+  const message = candidateMessages(arm, candidate, true);
+  const terminalLabel = terminalCandidateLabel(candidate.status);
+  const showTerminalRecovery = Boolean(terminalLabel) && isTerminalRecoverySession(session);
+  const cost = candidate.cost;
+  let costDisplay = "";
+  if (typeof cost?.usd === "number") {
+    costDisplay = `${cost.status === "upper-bound" ? "Up to " : ""}$${cost.usd.toFixed(4)}${cost.excludesGrounding ? " (grounding not included)" : ""}`;
+  } else if (candidate.cancellation?.billing === "unknown-may-be-charged") {
+    costDisplay = "Unknown; may have been charged";
+  } else if (cost?.status === "unavailable") {
+    costDisplay = "Unavailable";
+  }
   container.innerHTML = `<div class="inspector-content">
     <ol class="identity-path" aria-label="Candidate identity"><li>${escapeHtml(arm.recipe.name)}</li><li>${escapeHtml(session.subject)}</li><li>Variant ${candidate.variant} of ${arm.candidates.length}</li></ol>
-    ${ready ? `<img class="inspector-image" src="${imageUrl}" alt="Generated ${escapeHtml(identity)}">` : '<div class="inspector-placeholder" aria-hidden="true"></div>'}
+    ${ready ? `<img class="inspector-image" src="${imageUrl}" alt="Generated ${escapeHtml(identity)}">` : terminalLabel ? `<div class="inspector-placeholder terminal-placeholder${candidate.status === "failed" ? " failed-placeholder" : ""}"><strong>${terminalLabel}</strong></div>` : '<div class="inspector-placeholder" aria-hidden="true"></div>'}
     ${nativePreview}
-    <div class="inspector-section"><h3>Status and cost</h3><dl class="inspector-facts"><div class="inspector-fact"><dt>Status</dt><dd>${escapeHtml(candidate.status)}</dd></div>${cost === undefined ? "" : `<div class="inspector-fact"><dt>Cost</dt><dd>$${cost.toFixed(4)}</dd></div>`}</dl>${message ? `<p class="candidate-message">${escapeHtml(message)}</p>` : ""}</div>
-    <div class="inspector-section"><h3>Primary</h3><p>${primary ? "This is the Primary candidate for the run." : "Primary is optional and does not control exports."}</p>${primary ? '<button type="button" data-clear-primary>Clear Primary</button>' : `<button type="button" data-primary="${candidate.id}" ${ready ? "" : "disabled"}>Set as Primary</button>`}</div>
-    <div class="inspector-section"><h3>Export</h3><p>${exportedCount ? `Exported ${exportedCount} time${exportedCount === 1 ? "" : "s"}.` : "Export this candidate without changing Primary or the export checklist."}</p><button class="primary" type="button" data-export="${candidate.id}" ${exportReady && !state.exporting ? "" : "disabled"}>Export candidate</button></div>
+    <div class="inspector-section"><h3>Status and cost</h3><dl class="inspector-facts"><div class="inspector-fact"><dt>Status</dt><dd>${escapeHtml(statusLabel(candidate.status))}</dd></div>${costDisplay ? `<div class="inspector-fact"><dt>Cost</dt><dd>${escapeHtml(costDisplay)}</dd></div>` : ""}</dl>${message ? `<p class="candidate-message">${escapeHtml(message)}</p>` : ""}${showTerminalRecovery ? '<button class="primary inspector-recovery" type="button" data-terminal-recovery>Edit setup and retry</button>' : ""}</div>
+    ${
+      showTerminalRecovery
+        ? ""
+        : `<div class="inspector-section"><h3>Primary</h3><p>${primary ? "This is the Primary candidate for the run." : "Primary is optional and does not control exports."}</p>${primary ? '<button type="button" data-clear-primary>Clear Primary</button>' : `<button type="button" data-primary="${candidate.id}" ${ready ? "" : "disabled"}>Set as Primary</button>`}</div>
+    <div class="inspector-section"><h3>Export</h3><p>${exportedCount ? `Exported ${exportedCount} time${exportedCount === 1 ? "" : "s"}.` : "Export this candidate without changing Primary or the export checklist."}</p><button class="primary" type="button" data-export="${candidate.id}" ${exportReady ? (state.exporting ? 'aria-disabled="true"' : "") : "disabled"}>Export candidate</button></div>`
+    }
   </div>`;
+  restoreFocus(container, focusedControl);
 }
 
 function exportDisplayPath(session, exported) {
@@ -417,13 +560,79 @@ function updateHistoryCurrent() {
   );
 }
 
+function scrollBehavior() {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
 function renderExportTray() {
   const tray = $("#export-tray");
+  const focusedControl = captureFocus(tray);
   const count = state.exportSelectedIds.size;
   tray.hidden = count === 0;
   tray.innerHTML = count
-    ? `<button class="primary" type="button" data-export-selected ${state.exporting ? "disabled" : ""}>${state.exporting ? "Exporting…" : `Export selected (${count})`}</button>`
+    ? `<button class="primary" type="button" data-export-selected ${state.exporting ? 'aria-disabled="true"' : ""}>${state.exporting ? "Exporting…" : `Export selected (${count})`}</button>`
     : "";
+  restoreFocus(tray, focusedControl);
+}
+
+const graphemeSegmenter =
+  typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : undefined;
+
+function segmentText(text) {
+  return [...graphemeSegmenter.segment(text)];
+}
+
+function boundedCut(text, limit) {
+  const segments = segmentText(text);
+  const boundary = segments[limit]?.index ?? text.length;
+  const space = text.slice(0, boundary).lastIndexOf(" ");
+  if (space > 40) return space;
+  return boundary;
+}
+
+function splitSubject(subject) {
+  const text = String(subject ?? "").trim();
+  if (!text) return { title: "Candidates", subtitle: "" };
+  const newline = text.indexOf("\n");
+  if (!graphemeSegmenter) {
+    if (newline === -1) return { title: text, subtitle: "" };
+    const firstLine = text.slice(0, newline);
+    return {
+      title: firstLine.trim() || text,
+      subtitle: text.slice(newline + 1).trim(),
+    };
+  }
+  if (newline === -1 && segmentText(text).length <= 90) return { title: text, subtitle: "" };
+
+  const firstLine = newline === -1 ? text : text.slice(0, newline);
+  const rest = newline === -1 ? "" : text.slice(newline + 1);
+  let lead = firstLine;
+  let overflow = "";
+  if (segmentText(lead).length > 90) {
+    const sentence = lead.match(/^.+?[.!?](?=\s|$)/);
+    const cut =
+      sentence && segmentText(sentence[0]).length <= 120
+        ? sentence[0].length
+        : boundedCut(lead, 90);
+    overflow = lead.slice(cut);
+    lead = lead.slice(0, cut);
+  }
+  const title = lead.trim() || firstLine.trim() || text;
+  const subtitle = [overflow, rest]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+  return { title, subtitle };
+}
+
+function applySessionSubject(subject) {
+  const { title, subtitle } = splitSubject(subject);
+  $("#session-title").textContent = title;
+  const element = $("#session-subtitle");
+  element.textContent = subtitle;
+  element.hidden = !subtitle;
 }
 
 function renderSession(session) {
@@ -437,20 +646,26 @@ function renderSession(session) {
     showSessionMessage("");
   }
   state.currentSession = session;
+  $("#edit-setup").disabled = false;
+  $("#regenerate").disabled = false;
   $("#session-view").classList.remove("hidden", "loading");
   $("#session-meta").textContent =
     `${session.arms.length} style${session.arms.length === 1 ? "" : "s"} · ${modelShortLabel(session.settings.modelId)} · ${formatSize(session.settings.size)}`;
-  $("#session-title").textContent = session.subject;
+  applySessionSubject(session.subject);
   const candidates = session.arms.flatMap((arm) => arm.candidates);
   const counts = Object.groupBy(candidates, (candidate) => candidate.status);
-  $("#progress").textContent = [
-    `${candidates.length} total`,
-    `${counts.succeeded?.length || 0} succeeded`,
-    `${counts.running?.length || 0} running`,
-    `${counts.queued?.length || 0} queued`,
-    `${counts.failed?.length || 0} failed`,
-    `${counts["cancel-requested"]?.length || 0} cancel requested`,
-  ].join(" · ");
+  const progress = [`${candidates.length} total`, `${counts.succeeded?.length || 0} succeeded`];
+  for (const [status, label] of [
+    ["running", "running"],
+    ["queued", "queued"],
+    ["failed", "failed"],
+    ["interrupted", "interrupted"],
+    ["cancel-requested", "cancel requested"],
+  ]) {
+    const count = counts[status]?.length || 0;
+    if (count) progress.push(`${count} ${label}`);
+  }
+  setText($("#progress"), progress.join(" · "));
   renderCandidateGroups(session, sameSession);
   renderInspector(session);
   renderExportTray();
@@ -458,17 +673,31 @@ function renderSession(session) {
   updateRunSummary(session);
   if (!sameSession) setEditorCollapsed(true);
   updateHistoryCurrent();
-  const active = candidates.some((candidate) => ["queued", "running"].includes(candidate.status));
+  const active = ["queued", "running"].includes(session.status);
   $("#cancel").disabled = !active;
+  $("#cancel").hidden = !active;
   if (active) schedulePoll(session.id);
   else stopPolling();
 }
 
 function renderLoadingSession(subject) {
+  stopPolling();
+  state.sessionLoadIntent++;
+  state.currentSession = null;
+  state.focusedCandidateId = undefined;
+  state.exportSelectedIds.clear();
+  state.pollError = undefined;
+  $("#edit-setup").disabled = true;
+  $("#regenerate").disabled = true;
+  $("#cancel").disabled = true;
+  $("#cancel").hidden = true;
+  $("#candidate-inspector").dataset.signature = "";
+  renderExportTray();
+  updateHistoryCurrent();
   $("#session-view").classList.remove("hidden");
   $("#session-view").classList.add("loading");
   $("#session-meta").textContent = "Starting generation";
-  $("#session-title").textContent = subject;
+  applySessionSubject(subject);
   $("#progress").textContent = "Preparing candidates…";
   const loadingVariants = Math.min(8, Math.max(1, Number($("#variants").value) || 4));
   const loadingRecipes = Math.max(
@@ -485,26 +714,134 @@ function renderLoadingSession(subject) {
   $("#export-history").hidden = true;
 }
 
+function resetGenerateButton() {
+  $("#generate-button").textContent = "Generate";
+  $("#generate-button").disabled = !state.bootstrap.keyConfigured;
+}
+
 function transitionToResults() {
   requestAnimationFrame(() => {
     $("#session-title").focus({ preventScroll: true });
-    $("#session-view").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("#session-view").scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   });
 }
 
 async function refreshSession(sessionId, fromPoll = false) {
+  const epoch = state.epoch;
+  const intent = fromPoll ? undefined : ++state.sessionLoadIntent;
+  if (!fromPoll) resetGenerateButton();
   try {
     const result = await api(`/api/sessions/${sessionId}`);
+    if (state.epoch !== epoch) return;
+    if (!fromPoll && state.sessionLoadIntent !== intent) return;
     if (fromPoll && state.currentSession?.id !== sessionId) return;
+    if (
+      fromPoll &&
+      state.pollError?.sessionId === sessionId &&
+      $("#session-message").textContent === state.pollError.message
+    ) {
+      showSessionMessage("");
+      state.pollError = undefined;
+    }
     renderSession(result.session);
     if (!fromPoll) transitionToResults();
     if (fromPoll && !["queued", "running"].includes(result.session.status)) await loadHistory();
   } catch (error) {
+    if (state.epoch !== epoch) return;
+    if (!fromPoll && state.sessionLoadIntent !== intent) return;
+    if (fromPoll && state.currentSession?.id !== sessionId) return;
+    if (error.code === "session_not_found") {
+      const vanishedSession = state.currentSession;
+      if (vanishedSession) loadSessionIntoForm(vanishedSession);
+      resetResultsView({ hide: true });
+      state.derivedFromSessionId = undefined;
+      state.inheritReferences = false;
+      $("#derived-label").textContent = "";
+      clearReferences();
+      renderReferences();
+      setEditorCollapsed(false);
+      showSessionMessage("");
+      $("#form-error").textContent = "This run is no longer available. Start a new run.";
+      $("#subject").focus({ preventScroll: true });
+      return;
+    }
     showSessionMessage(error.message, true);
-    const active = state.currentSession?.arms
-      .flatMap((arm) => arm.candidates)
-      .some((candidate) => ["queued", "running"].includes(candidate.status));
+    if (fromPoll) state.pollError = { sessionId, message: error.message };
+    const active = ["queued", "running"].includes(state.currentSession?.status);
     if (fromPoll && state.currentSession?.id === sessionId && active) schedulePoll(sessionId);
+  }
+}
+
+function resetResultsView({ hide }) {
+  // Bump the epoch so any in-flight session/history response that resolves after
+  // this reset is discarded instead of repainting a deleted session.
+  state.epoch++;
+  stopPolling();
+  state.currentSession = null;
+  state.focusedCandidateId = undefined;
+  state.exportSelectedIds.clear();
+  state.exporting = false;
+  state.pollError = undefined;
+  state.sessionLoadIntent++;
+  const view = $("#session-view");
+  view.classList.remove("loading");
+  view.classList.toggle("hidden", hide);
+  $("#candidate-groups").innerHTML = "";
+  const inspector = $("#candidate-inspector");
+  inspector.innerHTML = "";
+  inspector.dataset.signature = "";
+  const exportHistory = $("#export-history");
+  exportHistory.hidden = true;
+  exportHistory.innerHTML = "";
+  exportHistory.dataset.signature = "";
+  const tray = $("#export-tray");
+  tray.hidden = true;
+  tray.innerHTML = "";
+  $("#cancel").disabled = true;
+  $("#cancel").hidden = true;
+  $("#edit-setup").disabled = true;
+  $("#regenerate").disabled = true;
+  updateHistoryCurrent();
+}
+
+async function clearHistory() {
+  const count = state.historyCount ?? 0;
+  if (!count && !state.historyUnavailable) return;
+  const confirmed = confirm(
+    state.historyUnavailable
+      ? "Permanently delete all stored runs and all generated and exported images? This can't be undone."
+      : `Permanently delete ${count} stored run${count === 1 ? "" : "s"} and all generated and exported images? This can't be undone.`,
+  );
+  if (!confirmed) return;
+  const status = $("#history-clear-status");
+  status.classList.remove("error");
+  status.textContent = "Clearing history…";
+  $("#history-clear").disabled = true;
+  try {
+    const result = await api("/api/history", { method: "DELETE" });
+    resetResultsView({ hide: true });
+    state.derivedFromSessionId = undefined;
+    state.inheritReferences = false;
+    $("#derived-label").textContent = "";
+    $("#form-error").textContent = "";
+    clearReferences();
+    renderReferences();
+    showSessionMessage("");
+    setEditorCollapsed(false);
+    state.historyUnavailable = false;
+    state.historyCount = 0;
+    $("#history-clear").textContent = "Clear history";
+    $("#history-clear").disabled = true;
+    $("#history-list").innerHTML = '<p class="hint">No workbench sessions yet.</p>';
+    renderSpend([]);
+    updateHistoryCurrent();
+    status.textContent = `Cleared ${result.cleared} stored run${result.cleared === 1 ? "" : "s"}.`;
+    $("#subject").focus();
+  } catch (error) {
+    await loadHistory().catch(renderHistoryError);
+    status.classList.add("error");
+    status.textContent = error.message;
+    $("#history-clear").focus({ preventScroll: true });
   }
 }
 
@@ -515,12 +852,25 @@ function showSessionMessage(message, isError = false) {
 }
 
 async function loadHistory() {
-  const result = await api("/api/history");
+  const epoch = state.epoch;
+  const intent = ++state.historyLoadIntent;
+  let result;
+  try {
+    result = await api("/api/history");
+  } catch (error) {
+    if (state.epoch !== epoch || state.historyLoadIntent !== intent) return;
+    throw error;
+  }
+  if (state.epoch !== epoch || state.historyLoadIntent !== intent) return;
+  state.historyUnavailable = false;
+  state.historyCount = result.sessions.length;
+  $("#history-clear").textContent = "Clear history";
+  $("#history-clear").disabled = result.sessions.length === 0;
   $("#history-list").innerHTML = result.sessions.length
     ? result.sessions
         .map(
           (session) =>
-            `<button class="history-item" type="button" data-session="${session.id}" ${session.id === state.currentSession?.id ? 'aria-current="true"' : ""}><strong>${escapeHtml(session.recipes.join(" + "))}</strong><span>${escapeHtml(session.subject)}</span><small>${escapeHtml(session.status)} · ${new Date(session.createdAt).toLocaleString()}</small></button>`,
+            `<button class="history-item" type="button" data-session="${session.id}" ${session.id === state.currentSession?.id ? 'aria-current="true"' : ""}><strong>${escapeHtml(session.recipes.join(" + "))}</strong><span>${escapeHtml(session.subject)}</span><small>${escapeHtml(statusLabel(session.status))} · ${new Date(session.createdAt).toLocaleString()}</small></button>`,
         )
         .join("")
     : '<p class="hint">No workbench sessions yet.</p>';
@@ -529,6 +879,21 @@ async function loadHistory() {
   }
   renderSpend(result.sessions);
   updateHistoryCurrent();
+}
+
+function renderHistoryError(error) {
+  if (error.code === "history_read_failed") {
+    state.historyUnavailable = true;
+    state.historyCount = null;
+    $("#history-list").innerHTML =
+      '<p class="error" role="alert">Stored history is unavailable. Clear all history to recover.</p>';
+    $("#history-clear").textContent = "Clear all history";
+    $("#history-clear").disabled = false;
+    $("#spend-toggle").hidden = true;
+    setSpendOpen(false);
+    return;
+  }
+  $("#history-list").innerHTML = `<p class="error" role="alert">${escapeHtml(error.message)}</p>`;
 }
 
 async function setPrimary(candidateId) {
@@ -565,7 +930,8 @@ async function requestExport(sessionId, candidateId) {
 }
 
 async function exportCandidate(candidateId) {
-  const sessionId = state.currentSession.id;
+  const sessionId = state.currentSession?.id;
+  if (!sessionId || state.exporting) return;
   showSessionMessage("Exporting candidate…");
   state.exporting = true;
   renderInspector(state.currentSession);
@@ -615,6 +981,7 @@ async function exportSelected() {
   }
   state.exporting = false;
   if (state.currentSession?.id !== sessionId) {
+    if (state.currentSession) renderInspector(state.currentSession);
     renderExportTray();
     return;
   }
@@ -640,12 +1007,13 @@ function setFocusedCandidate(candidateId) {
 function focusInspectorAction() {
   $("#candidate-inspector")
     .querySelector(
-      "[data-primary]:not(:disabled), [data-clear-primary], [data-export]:not(:disabled)",
+      "[data-terminal-recovery], [data-primary]:not(:disabled), [data-clear-primary], [data-export]:not(:disabled)",
     )
     ?.focus();
 }
 
 function loadSessionIntoForm(session) {
+  if (!session) return;
   state.derivedFromSessionId = session.id;
   state.inheritReferences = session.references.length > 0;
   $("#derived-label").textContent = `Based on current session`;
@@ -669,7 +1037,7 @@ function loadSessionIntoForm(session) {
   updateEstimate();
   setEditorCollapsed(false);
   $("#subject").focus();
-  $("#generation-form").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#generation-form").scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 async function submitGeneration(event) {
@@ -696,19 +1064,21 @@ async function submitGeneration(event) {
   generateButton.disabled = true;
   generateButton.textContent = "Generating…";
   renderLoadingSession(payload.subject);
+  const intent = state.sessionLoadIntent;
   transitionToResults();
   try {
     const result = await api("/api/sessions", { method: "POST", body: form });
+    if (state.sessionLoadIntent !== intent) return;
     renderSession(result.session);
     transitionToResults();
-    await loadHistory();
+    await loadHistory().catch(renderHistoryError);
   } catch (error) {
+    if (state.sessionLoadIntent !== intent) return;
     $("#session-view").classList.add("hidden");
     $("#form-error").textContent = error.message;
     if (error.code === "confirmation_required") $("#confirmation-row").classList.remove("hidden");
   } finally {
-    generateButton.textContent = "Generate";
-    generateButton.disabled = !state.bootstrap.keyConfigured;
+    if (state.sessionLoadIntent === intent) resetGenerateButton();
   }
 }
 
@@ -723,6 +1093,7 @@ function setHistoryOpen(open) {
   $("#history-drawer").hidden = !open;
   $("#history-panel").classList.toggle("open", open);
   $("#history-toggle .history-toggle-label").textContent = open ? "Hide history" : "Show history";
+  $("#history-toggle").title = open ? "Hide history" : "Show history";
   updateHistoryCurrent();
 }
 
@@ -745,6 +1116,13 @@ function modelShortLabel(modelId) {
   return modelLabel(modelId).split(" · ").pop() ?? modelId;
 }
 
+function modelNameParts(modelId) {
+  const label = modelLabel(modelId);
+  const index = label.indexOf(" · ");
+  if (index === -1) return { name: label, detail: "" };
+  return { name: label.slice(0, index), detail: label.slice(index + 3) };
+}
+
 function formatSize(size) {
   return /^\d+$/.test(size) ? `${size}px` : size;
 }
@@ -762,6 +1140,7 @@ function emptySpendSummary() {
     upperBoundCount: 0,
     unavailableCount: 0,
     unknownMayBeChargedCount: 0,
+    unknownGroundingChargeCount: 0,
     hasCalculatedUsd: false,
     hasUpperBoundUsd: false,
     partial: false,
@@ -786,20 +1165,39 @@ function addSpend(summary, spend) {
   summary.upperBoundCount += spend.upperBoundCount;
   summary.unavailableCount += spend.unavailableCount;
   summary.unknownMayBeChargedCount += spend.unknownMayBeChargedCount;
+  summary.unknownGroundingChargeCount += spend.unknownGroundingChargeCount ?? 0;
   if (spend.status === "partial") summary.partial = true;
-  if (spend.status === "unavailable") summary.unavailable = true;
+  if (spend.status === "unavailable" && spend.unavailableCount > 0) summary.unavailable = true;
 }
 
-function formatSpend(summary) {
-  const hasUnknown =
-    summary.partial ||
-    summary.unavailable ||
-    summary.unavailableCount > 0 ||
-    summary.unknownMayBeChargedCount > 0;
+function spendCaveats(summary) {
+  const caveats = [];
+  if (summary.unavailable || summary.unavailableCount > 0) {
+    caveats.push("Some image costs are unavailable.");
+  }
+  if (summary.unknownMayBeChargedCount > 0) {
+    caveats.push(
+      `${summary.unknownMayBeChargedCount} canceled request${summary.unknownMayBeChargedCount === 1 ? " may" : "s may"} have been charged.`,
+    );
+  }
+  if (summary.unknownGroundingChargeCount > 0) {
+    caveats.push(
+      `Grounding charges are not included for ${summary.unknownGroundingChargeCount} candidate request${summary.unknownGroundingChargeCount === 1 ? "" : "s"}.`,
+    );
+  }
+  return caveats;
+}
+
+function formatSpend(summary, compact = false) {
   const parts = [];
   if (summary.hasCalculatedUsd) parts.push(`$${summary.calculatedUsd.toFixed(2)}`);
-  if (summary.hasUpperBoundUsd) parts.push(`≤$${summary.upperBoundUsd.toFixed(2)}`);
-  if (hasUnknown) return parts.length ? `${parts.join(" + ")} + unknown` : "Unavailable";
+  if (summary.hasUpperBoundUsd) parts.push(`up to $${summary.upperBoundUsd.toFixed(2)}`);
+  const caveats = spendCaveats(summary);
+  if (caveats.length) {
+    if (!parts.length && summary.unknownMayBeChargedCount > 0) return "May have charges";
+    if (!parts.length) return "Cost unavailable";
+    return `${compact ? "Partial · " : "Known: "}${parts.join(" + ")}`;
+  }
   return parts.length ? parts.join(" + ") : "$0.00";
 }
 
@@ -808,6 +1206,9 @@ function renderSpend(sessions) {
   if (!sessions.length) {
     toggle.hidden = true;
     setSpendOpen(false);
+    $("#spend-total").textContent = "$0.00";
+    toggle.setAttribute("aria-label", "All stored runs spend: $0.00");
+    $("#spend-breakdown").innerHTML = "";
     return;
   }
   const byModel = new Map();
@@ -825,7 +1226,7 @@ function renderSpend(sessions) {
     byModel.set(session.settings.modelId, entry);
   }
   toggle.hidden = false;
-  const totalLabel = formatSpend(total);
+  const totalLabel = formatSpend(total, true);
   $("#spend-total").textContent = totalLabel;
   toggle.setAttribute("aria-label", `All stored runs spend: ${totalLabel}`);
   const rows = [...byModel.entries()]
@@ -835,10 +1236,11 @@ function renderSpend(sessions) {
         b[1].spend.upperBoundUsd -
         (a[1].spend.calculatedUsd + a[1].spend.upperBoundUsd),
     )
-    .map(
-      ([modelId, entry]) =>
-        `<div class="spend-row"><span class="spend-model">${escapeHtml(modelLabel(modelId))}</span><span class="spend-meta"><span class="muted">${entry.imageCountKnown ? `${entry.images} generated image${entry.images === 1 ? "" : "s"}` : "Generated image count unavailable"}</span><strong>${escapeHtml(formatSpend(entry.spend))}</strong></span></div>`,
-    )
+    .map(([modelId, entry]) => {
+      const { name, detail } = modelNameParts(modelId);
+      const caveats = spendCaveats(entry.spend);
+      return `<div class="spend-row"><span class="spend-model"><span class="spend-model-name">${escapeHtml(name)}</span>${detail ? `<span class="spend-model-detail">${escapeHtml(detail)}</span>` : ""}</span><span class="spend-meta"><span class="muted">${entry.imageCountKnown ? `${entry.images} generated image${entry.images === 1 ? "" : "s"}` : "Generated image count unavailable"}</span><strong>${escapeHtml(formatSpend(entry.spend))}</strong></span>${caveats.length ? `<span class="spend-caveat">${escapeHtml(caveats.join(" "))}</span>` : ""}</div>`;
+    })
     .join("");
   $("#spend-breakdown").innerHTML =
     `<p class="spend-head">Across all ${sessions.length} stored run${sessions.length === 1 ? "" : "s"}</p>${rows}`;
@@ -848,11 +1250,19 @@ async function initialize() {
   const savedTheme = localStorage.getItem("nano-banana-theme");
   setTheme(savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   state.bootstrap = await api("/api/bootstrap");
-  $("#key-status").textContent = state.bootstrap.keyConfigured
+  const keyStatus = $("#key-status");
+  const keyLabel = state.bootstrap.keyConfigured
     ? state.bootstrap.mock
       ? "Mock generation"
       : "API key configured"
     : "API key not configured";
+  const keyState = state.bootstrap.keyConfigured
+    ? state.bootstrap.mock
+      ? "is-mock"
+      : "is-configured"
+    : "is-missing";
+  keyStatus.classList.add(keyState);
+  keyStatus.querySelector(".key-status-label").textContent = keyLabel;
   if (!state.bootstrap.keyConfigured) {
     $("#generate-button").disabled = true;
     $("#key-guidance").classList.remove("hidden");
@@ -871,7 +1281,7 @@ async function initialize() {
   $("#variants").value = state.bootstrap.defaults.variantsPerRecipe;
   updateSubjectCount();
   updateEstimate();
-  await loadHistory();
+  await loadHistory().catch(renderHistoryError);
 }
 
 $("#generation-form").addEventListener("submit", submitGeneration);
@@ -888,25 +1298,33 @@ $("#references").addEventListener("change", (event) => {
 $("#history-toggle").addEventListener("click", () => {
   setHistoryOpen($("#history-toggle").getAttribute("aria-expanded") !== "true");
 });
+$("#history-clear").addEventListener("click", clearHistory);
 $("#history-refresh").addEventListener("click", async () => {
   try {
     await loadHistory();
   } catch (error) {
-    $("#history-list").innerHTML = `<p class="error" role="alert">${escapeHtml(error.message)}</p>`;
+    renderHistoryError(error);
   }
 });
 $("#edit-setup").addEventListener("click", () => {
-  setEditorCollapsed(false);
-  $("#subject").focus();
+  if (state.currentSession) loadSessionIntoForm(state.currentSession);
 });
 $("#cancel").addEventListener("click", async () => {
+  const sessionId = state.currentSession?.id;
+  if (!sessionId) return;
+  $("#cancel").disabled = true;
   showSessionMessage("Cancelling remaining calls…");
   try {
-    const result = await api(`/api/sessions/${state.currentSession.id}/cancel`, { method: "POST" });
+    const result = await api(`/api/sessions/${sessionId}/cancel`, { method: "POST" });
+    if (state.currentSession?.id !== sessionId) return;
     renderSession(result.session);
     showSessionMessage("Cancellation requested. In-flight billing may still occur.");
   } catch (error) {
-    showSessionMessage(error.message, true);
+    if (state.currentSession?.id === sessionId) showSessionMessage(error.message, true);
+  } finally {
+    if (state.currentSession?.id === sessionId) {
+      $("#cancel").disabled = !["queued", "running"].includes(state.currentSession.status);
+    }
   }
 });
 $("#candidate-groups").addEventListener("click", (event) => {
@@ -930,13 +1348,18 @@ $("#candidate-inspector").addEventListener("click", (event) => {
   if (event.target.closest("[data-clear-primary]")) void setPrimary(null);
   const exportButton = event.target.closest("[data-export]");
   if (exportButton) void exportCandidate(exportButton.dataset.export);
+  if (event.target.closest("[data-terminal-recovery]") && state.currentSession) {
+    loadSessionIntoForm(state.currentSession);
+  }
 });
 $("#export-tray").addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("[data-export-selected]")) {
     void exportSelected();
   }
 });
-$("#regenerate").addEventListener("click", () => loadSessionIntoForm(state.currentSession));
+$("#regenerate").addEventListener("click", () => {
+  if (state.currentSession) loadSessionIntoForm(state.currentSession);
+});
 $("#theme-toggle").addEventListener("click", () => {
   setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark", true);
 });

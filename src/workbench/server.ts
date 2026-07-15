@@ -1,21 +1,21 @@
-import { timingSafeEqual, randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { join, sep } from "node:path";
 
 import { resolveApiKey } from "../env";
 import { detectImageMimeType } from "../image-tools";
-import { VALID_ASPECTS, VALID_SIZES, type AspectRatio, type ImageSize } from "../models";
+import { type AspectRatio, type ImageSize, VALID_ASPECTS, VALID_SIZES } from "../models";
 import { packageRoot } from "../paths";
-import { JobQueue, mockGenerationRunner, type GenerationRunner } from "./jobs";
+import { type GenerationRunner, JobQueue, mockGenerationRunner } from "./jobs";
 import {
+  type CreateSessionInput,
   MAX_REFERENCE_BYTES,
   MAX_REFERENCE_COUNT,
   MAX_SUBJECT_LENGTH,
   MAX_TOTAL_REFERENCE_BYTES,
   SessionStore,
-  WorkbenchError,
-  type CreateSessionInput,
   type UploadedReference,
+  WorkbenchError,
 } from "./store";
 
 const webRoot = join(packageRoot(), "web");
@@ -254,6 +254,24 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
   const runner = options.runner ?? (mock ? mockGenerationRunner : undefined);
   const queue = apiKey ? new JobQueue(store, apiKey, runner) : undefined;
 
+  // Serialize every session-mutating action (create/cancel/select/export) against
+  // clear-all so a full-tree delete can never interleave with a write that would
+  // resurrect a partial session directory.
+  let mutationTail: Promise<void> = Promise.resolve();
+  async function withMutation<T>(action: () => Promise<T>): Promise<T> {
+    const previous = mutationTail;
+    let release!: () => void;
+    mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+    }
+  }
+
   const server = Bun.serve({
     hostname: host,
     port,
@@ -351,6 +369,21 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
           return json({ sessions: await store.listHistory() });
         }
 
+        if (request.method === "DELETE" && url.pathname === "/api/history") {
+          const result = await withMutation(async () => {
+            const snapshot = queue?.snapshot();
+            if (snapshot && (snapshot.pending || snapshot.active)) {
+              throw new WorkbenchError(
+                "history_busy",
+                "Finish or cancel active generations before clearing history.",
+                409,
+              );
+            }
+            return store.clearAllSessions();
+          });
+          return json(result);
+        }
+
         const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
         if (request.method === "GET" && sessionMatch) {
           return json({ session: await store.readSession(sessionMatch[1]) });
@@ -432,8 +465,11 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
               bytes,
             });
           }
-          const session = await store.createSession({ ...payload, references });
-          await queue.enqueueSession(session.id);
+          const session = await withMutation(async () => {
+            const created = await store.createSession({ ...payload, references });
+            await queue.enqueueSession(created.id);
+            return created;
+          });
           return json({ session }, 201);
         }
 
@@ -444,7 +480,7 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
           const [, sessionId, action] = actionMatch;
           if (action === "cancel") {
             if (!queue) throw new WorkbenchError("queue_unavailable", "Queue is unavailable.", 409);
-            return json({ session: await queue.cancelSession(sessionId) });
+            return json({ session: await withMutation(() => queue.cancelSession(sessionId)) });
           }
           const body = await requestJsonRecord(request);
           exactKeys(body, ["candidateId"], "Action body");
@@ -454,12 +490,14 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
             if (candidateId === "") {
               throw new WorkbenchError("missing_candidate", "candidateId is required.");
             }
-            return json({ session: await store.selectCandidate(sessionId, candidateId) });
+            return json({
+              session: await withMutation(() => store.selectCandidate(sessionId, candidateId)),
+            });
           }
           const candidateId = requiredString(body.candidateId, "candidateId");
           if (!candidateId)
             throw new WorkbenchError("missing_candidate", "candidateId is required.");
-          const result = await store.exportCandidate(sessionId, candidateId);
+          const result = await withMutation(() => store.exportCandidate(sessionId, candidateId));
           return json(result);
         }
 

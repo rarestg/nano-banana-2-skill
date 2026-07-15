@@ -12,7 +12,7 @@
     "workbench": "bun run src/cli.ts workbench",
     "test": "bun run test:ui && bun run test:unit",
     "test:unit": "bun test --no-orphans --path-ignore-patterns='**/ui-browser.test.ts'",
-    "test:ui": "bun test --no-orphans test/ui-browser.test.ts -t 'preserves local|keeps a paused|reuses and revokes' && bun test --no-orphans test/ui-browser.test.ts -t 'uses a collapsed|keeps Primary|reports partial' && bun test --no-orphans test/ui-browser.test.ts -t 'aggregates truthful|keeps cancellation|disables project-icon|disables generation'",
+    "test:ui": "bun test --no-orphans test/ui-browser.test.ts",
     "typecheck": "tsc --noEmit",
     "format:check": "biome format .",
     "lint": "biome lint .",
