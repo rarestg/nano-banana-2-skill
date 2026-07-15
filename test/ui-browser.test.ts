@@ -250,12 +250,6 @@ describe("workbench browser contract", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page
-        .locator(".history-toggle-label")
-        .evaluate((label) => getComputedStyle(label).clipPath),
-    ).toBe("none");
-    expect(await page.locator(".history-toggle-label").isVisible()).toBe(true);
-    expect(
-      await page
         .locator("#history-drawer")
         .evaluate((drawer) => getComputedStyle(drawer).overflowY),
     ).toBe("auto");
@@ -268,18 +262,6 @@ describe("workbench browser contract", () => {
           ),
       ).size,
     ).toBe(4);
-    expect(await page.locator("#key-status").isVisible()).toBe(true);
-    expect(await page.locator("#spend-toggle").isVisible()).toBe(true);
-    expect(await page.locator("#theme-toggle").isVisible()).toBe(true);
-    await page.click("#spend-toggle");
-    expect(await page.locator("#spend-toggle").getAttribute("aria-expanded")).toBe("true");
-    expect(await page.locator("#spend-breakdown").isVisible()).toBe(true);
-    const spendBounds = await page.locator("#spend-breakdown").boundingBox();
-    expect(spendBounds).not.toBeNull();
-    expect(spendBounds?.x).toBeGreaterThanOrEqual(0);
-    expect((spendBounds?.x ?? 0) + (spendBounds?.width ?? 0)).toBeLessThanOrEqual(390);
-    expect(spendBounds?.y).toBeGreaterThanOrEqual(0);
-    expect((spendBounds?.y ?? 0) + (spendBounds?.height ?? 0)).toBeLessThanOrEqual(844);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth === document.documentElement.clientWidth,

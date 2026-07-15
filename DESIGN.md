@@ -107,7 +107,7 @@ The system is restrained rather than austere. Teal marks action, selection, and 
 - Dense enough for repeated professional use, never cramped.
 - Parallel comparison is the dominant layout behavior: every candidate in a run stays visible at once.
 - Familiar controls with visible focus and unmistakable selected/Primary states.
-- Desktop is the authoritative target; narrow-viewport breakpoints (1180 / 860 / 680px) degrade the multi-column layouts gracefully. Typography stays fixed at every width.
+- Desktop viewports are the only supported target. Existing narrow-layout behavior is a best-effort fallback; do not add, redesign, or test narrow/mobile adaptations unless product scope changes. Typography stays fixed at every width.
 - Decoration is subordinate to the images and the decision.
 
 ## 2. Colors
@@ -218,7 +218,7 @@ Components feel compact, explicit, and familiar. Every interactive primitive nee
 
 ### Recipe Selector
 
-Recipe options are selectable cards with a visible native checkbox relationship. Selection uses both the teal boundary/wash and explicit “Included” text. The four-column comparison grid reduces to fewer columns at the narrow-viewport breakpoints; desktop shows all four.
+Recipe options are selectable cards with a visible native checkbox relationship. Selection uses both the teal boundary/wash and explicit “Included” text. The supported desktop layout shows all four comparison columns.
 
 ### Contact Sheet
 
