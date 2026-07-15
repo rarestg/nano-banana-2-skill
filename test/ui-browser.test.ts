@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Browser, type BrowserContext, chromium, type Page, type Request } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Locator,
+  type Page,
+  type Request,
+} from "playwright";
 
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
 import { pngBytes, sessionInput, svgResult } from "./helpers";
@@ -99,15 +106,33 @@ describe("workbench browser contract", () => {
     expect(await page.locator("#palette-preview").count()).toBe(0);
     expect(await page.locator("#palette-picker").textContent()).not.toContain("#FAFAFA");
 
+    const contentInset = (input: Locator, cardSelector: string) =>
+      input.locator(`+ ${cardSelector}`).evaluate((card) => {
+        const label = card.querySelector("strong");
+        if (!label) throw new Error("Missing selector label.");
+        const cardRect = card.getBoundingClientRect();
+        const labelRect = label.getBoundingClientRect();
+        return { left: labelRect.left - cardRect.left, top: labelRect.top - cardRect.top };
+      });
+    const imageInset = await contentInset(image, "span");
+    await image.check();
+    expect(await contentInset(image, "span")).toEqual(imageInset);
+    await icon.check();
+
     await page.emulateMedia({ forcedColors: "active" });
     expect(
-      await icon.locator("+ span").evaluate((card) => getComputedStyle(card).borderWidth),
-    ).toBe("2px");
+      await icon.locator("+ span").evaluate((card) => ({
+        border: getComputedStyle(card).borderWidth,
+        outline: getComputedStyle(card).outlineWidth,
+      })),
+    ).toEqual({ border: "1px", outline: "1px" });
     await page.emulateMedia({ forcedColors: "none" });
 
     const flat = page.locator('input[name="recipe"][value="folio-flat-cut-paper"]');
     const custom = page.locator('input[name="recipe"][value="custom-icon"]');
+    const flatInset = await contentInset(flat, ".recipe-card");
     await flat.check();
+    expect(await contentInset(flat, ".recipe-card")).toEqual(flatInset);
     await custom.check();
     expect(await page.locator("#recipe-feedback").textContent()).toContain(
       "Custom icon replaces the selected style recipes",
