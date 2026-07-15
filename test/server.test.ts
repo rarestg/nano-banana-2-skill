@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { discoverExeDevLaunchUrl } from "../src/workbench/exe-dev";
 import { startWorkbench, validateUploadContentLength } from "../src/workbench/server";
-import { pngBytes } from "./helpers";
+import { pngBytes, sessionInput, svgResult } from "./helpers";
 
 const instances: Array<Awaited<ReturnType<typeof startWorkbench>>> = [];
 const roots: string[] = [];
@@ -240,6 +240,59 @@ describe("local server safety", () => {
       });
       expect(response.status).toBe(400);
     }
+  });
+
+  test("accepts null candidateId only for clearing the primary", async () => {
+    const { instance, origin } = await server();
+    const session = await instance.store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const images = await instance.store.saveCandidateImages(
+      session.id,
+      "candidate-1-1",
+      svgResult("primary").images,
+    );
+    await instance.store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    await instance.store.selectCandidate(session.id, "candidate-1-1");
+
+    const clear = await fetch(`${origin}/api/sessions/${session.id}/select`, {
+      method: "POST",
+      headers: { ...headers(instance, origin), "content-type": "application/json" },
+      body: JSON.stringify({ candidateId: null }),
+    });
+    const clearBody = await clear.json();
+    const invalidExport = await fetch(`${origin}/api/sessions/${session.id}/export`, {
+      method: "POST",
+      headers: { ...headers(instance, origin), "content-type": "application/json" },
+      body: JSON.stringify({ candidateId: null }),
+    });
+
+    expect(clear.status).toBe(200);
+    expect(clearBody.session).not.toHaveProperty("selectedCandidateId");
+    expect((await instance.store.readSession(session.id)).selectedCandidateId).toBeUndefined();
+    expect(invalidExport.status).toBe(400);
+  });
+
+  test("history omits dollar subtotals when spend is unavailable", async () => {
+    const { instance, origin } = await server();
+    const session = await instance.store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    await instance.store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "failed";
+    });
+
+    const response = await fetch(`${origin}/api/history`, {
+      headers: { "x-workbench-token": instance.token },
+    });
+    const body = await response.json();
+    const summary = body.sessions.find((item: { id: string }) => item.id === session.id);
+
+    expect(response.status).toBe(200);
+    expect(summary.generatedImageCount).toBe(0);
+    expect(summary.spend.status).toBe("unavailable");
+    expect(summary.spend).not.toHaveProperty("calculatedUsd");
+    expect(summary.spend).not.toHaveProperty("upperBoundUsd");
+    expect(summary).not.toHaveProperty("usageCostUsd");
   });
 
   test("rejects hostile uploads and preserves sanitized ordered filenames", async () => {

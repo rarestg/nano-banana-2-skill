@@ -144,6 +144,16 @@ export interface CreateSessionInput {
   confirmationAcknowledged?: boolean;
 }
 
+export interface SpendSummary {
+  status: "complete" | "upper-bound" | "partial" | "unavailable";
+  calculatedUsd?: number;
+  upperBoundUsd?: number;
+  calculatedCount: number;
+  upperBoundCount: number;
+  unavailableCount: number;
+  unknownMayBeChargedCount: number;
+}
+
 export class WorkbenchError extends Error {
   constructor(
     public code: string,
@@ -678,8 +688,12 @@ export class SessionStore {
     return records;
   }
 
-  async selectCandidate(sessionId: string, candidateId: string) {
+  async selectCandidate(sessionId: string, candidateId: string | null) {
     return this.updateSession(sessionId, (manifest) => {
+      if (candidateId === null) {
+        delete manifest.selectedCandidateId;
+        return;
+      }
       const { candidate } = this.findCandidate(manifest, candidateId);
       if (candidate.status !== "succeeded") {
         throw new WorkbenchError(
@@ -806,7 +820,6 @@ export class SessionStore {
         production,
       };
       const bundleManifest = structuredClone(manifest);
-      bundleManifest.selectedCandidateId = candidateId;
       bundleManifest.exports.push(record);
       bundleManifest.updatedAt = new Date().toISOString();
       const bundleManifestPath = join(stageDirectory, "manifest.json");
@@ -831,7 +844,6 @@ export class SessionStore {
           ) {
             throw new WorkbenchError("candidate_changed", "Candidate changed during export.", 409);
           }
-          latest.selectedCandidateId = candidateId;
           latest.exports.push(structuredClone(record));
         });
       } catch (error) {
@@ -881,29 +893,62 @@ export class SessionStore {
         } catch {}
       }
     }
-    return sessions.map((manifest) => ({
-      id: manifest.id,
-      createdAt: manifest.createdAt,
-      updatedAt: manifest.updatedAt,
-      status: manifest.status,
-      subject: manifest.subject,
-      recipes: manifest.arms.map((arm) => arm.recipe.name),
-      settings: manifest.settings,
-      estimate: manifest.estimate,
-      usageCostUsd: manifest.arms
-        .flatMap((arm) => arm.candidates)
-        .reduce((sum, candidate) => sum + (candidate.cost?.usd ?? 0), 0),
-      costStatus: manifest.arms
-        .flatMap((arm) => arm.candidates)
-        .some((candidate) => candidate.cost?.status === "upper-bound")
-        ? "upper-bound"
-        : manifest.arms
-              .flatMap((arm) => arm.candidates)
-              .some((candidate) => candidate.cost?.status === "calculated")
-          ? "calculated"
-          : "unavailable",
-      selectedCandidateId: manifest.selectedCandidateId,
-    }));
+    return sessions.map((manifest) => {
+      const candidates = manifest.arms.flatMap((arm) => arm.candidates);
+      let calculatedUsd = 0;
+      let upperBoundUsd = 0;
+      let calculatedCount = 0;
+      let upperBoundCount = 0;
+      let unavailableCount = 0;
+      let unknownMayBeChargedCount = 0;
+      for (const candidate of candidates) {
+        if (candidate.cost?.status === "calculated" && candidate.cost.usd !== undefined) {
+          calculatedUsd += candidate.cost.usd;
+          calculatedCount++;
+        } else if (candidate.cost?.status === "upper-bound" && candidate.cost.usd !== undefined) {
+          upperBoundUsd += candidate.cost.usd;
+          upperBoundCount++;
+        } else if (candidate.cancellation?.billing === "unknown-may-be-charged") {
+          unknownMayBeChargedCount++;
+        } else if (candidate.cancellation?.billing !== "not-submitted") {
+          unavailableCount++;
+        }
+      }
+      const hasKnownCost = calculatedCount + upperBoundCount > 0;
+      const hasUnknownCost = unavailableCount + unknownMayBeChargedCount > 0;
+      const spend: SpendSummary = {
+        status: hasUnknownCost
+          ? hasKnownCost
+            ? "partial"
+            : "unavailable"
+          : upperBoundCount
+            ? "upper-bound"
+            : "complete",
+        calculatedUsd: calculatedCount ? calculatedUsd : undefined,
+        upperBoundUsd: upperBoundCount ? upperBoundUsd : undefined,
+        calculatedCount,
+        upperBoundCount,
+        unavailableCount,
+        unknownMayBeChargedCount,
+      };
+      return {
+        id: manifest.id,
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+        status: manifest.status,
+        subject: manifest.subject,
+        recipes: manifest.arms.map((arm) => arm.recipe.name),
+        settings: manifest.settings,
+        estimate: manifest.estimate,
+        generatedImageCount: candidates.reduce(
+          (sum, candidate) =>
+            sum + (candidate.status === "succeeded" ? candidate.images.length : 0),
+          0,
+        ),
+        spend,
+        selectedCandidateId: manifest.selectedCandidateId,
+      };
+    });
   }
 
   async recoverInterruptedSessions() {

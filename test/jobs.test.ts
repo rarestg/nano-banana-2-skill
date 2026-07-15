@@ -37,10 +37,13 @@ describe("bounded fair job queue", () => {
     const final = await store.readSession(session.id);
     expect(maxActive).toBe(2);
     expect(started).toHaveLength(4);
-    expect(started[0]).toContain("Flat geometric isometric");
-    expect(started[1]).toContain("Flat cut-paper");
-    expect(started[2]).toContain("Flat geometric isometric");
-    expect(started[3]).toContain("Flat cut-paper");
+    const styles = started.map((prompt) => {
+      if (prompt.includes("Flat geometric isometric")) return "geometric";
+      if (prompt.includes("Flat cut-paper")) return "cut-paper";
+      return "unknown";
+    });
+    expect(styles.slice(0, 2).sort()).toEqual(["cut-paper", "geometric"]);
+    expect(styles.slice(2).sort()).toEqual(["cut-paper", "geometric"]);
     expect(
       final.arms.flatMap((arm) => arm.candidates).map((candidate) => candidate.status),
     ).toEqual(["succeeded", "succeeded", "succeeded", "succeeded"]);

@@ -448,12 +448,17 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
           }
           const body = await requestJsonRecord(request);
           exactKeys(body, ["candidateId"], "Action body");
+          if (action === "select") {
+            const candidateId =
+              body.candidateId === null ? null : requiredString(body.candidateId, "candidateId");
+            if (candidateId === "") {
+              throw new WorkbenchError("missing_candidate", "candidateId is required.");
+            }
+            return json({ session: await store.selectCandidate(sessionId, candidateId) });
+          }
           const candidateId = requiredString(body.candidateId, "candidateId");
           if (!candidateId)
             throw new WorkbenchError("missing_candidate", "candidateId is required.");
-          if (action === "select") {
-            return json({ session: await store.selectCandidate(sessionId, candidateId) });
-          }
           const result = await store.exportCandidate(sessionId, candidateId);
           return json(result);
         }

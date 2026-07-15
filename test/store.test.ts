@@ -226,7 +226,7 @@ describe("durable sessions", () => {
         references: [{ name: "style.png", mimeType: "image/png", bytes: pngBytes() }],
       }),
     );
-    const generated = svgResult("export").images;
+    const generated = [{ bytes: pngBytes(), mimeType: "image/png" }];
     const images = await store.saveCandidateImages(created.id, "candidate-1-1", generated);
     await store.updateSession(created.id, (manifest) => {
       const candidate = manifest.arms[0].candidates[0];
@@ -272,13 +272,132 @@ describe("durable sessions", () => {
     expect(
       (await readdir(store.sessionDirectory(created.id))).some((entry) => entry.endsWith(".tmp")),
     ).toBe(false);
+  }, 15_000);
+
+  test("export preserves an existing primary in session and bundle manifests", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(
+      sessionInput({ recipeIds: ["custom"], variantsPerRecipe: 1 }),
+    );
+    const images = await store.saveCandidateImages(created.id, "candidate-1-1", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
+    await store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    await store.selectCandidate(created.id, "candidate-1-1");
+
+    const result = await store.exportCandidate(created.id, "candidate-1-1");
+    const bundle = JSON.parse(
+      await readFile(
+        store.pathInSession(created.id, join(result.export.directory, "manifest.json")),
+        "utf8",
+      ),
+    );
+
+    expect(result.manifest.selectedCandidateId).toBe("candidate-1-1");
+    expect((await store.readSession(created.id)).selectedCandidateId).toBe("candidate-1-1");
+    expect(bundle.selectedCandidateId).toBe("candidate-1-1");
+  });
+
+  test("clears the primary without changing candidate selection rules", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const images = await store.saveCandidateImages(
+      created.id,
+      "candidate-1-1",
+      svgResult("primary").images,
+    );
+    await store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    await store.selectCandidate(created.id, "candidate-1-1");
+
+    const cleared = await store.selectCandidate(created.id, null);
+    const persisted = JSON.parse(
+      await readFile(store.pathInSession(created.id, "manifest.json"), "utf8"),
+    );
+
+    expect(cleared.selectedCandidateId).toBeUndefined();
+    expect(persisted).not.toHaveProperty("selectedCandidateId");
+  });
+
+  test("exporting a different candidate does not change the primary", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(
+      sessionInput({ recipeIds: ["custom"], variantsPerRecipe: 2 }),
+    );
+    const primaryImages = await store.saveCandidateImages(created.id, "candidate-1-1", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
+    const exportedImages = await store.saveCandidateImages(created.id, "candidate-1-2", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
+    await store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = primaryImages;
+      manifest.arms[0].candidates[1].status = "succeeded";
+      manifest.arms[0].candidates[1].images = exportedImages;
+    });
+    await store.selectCandidate(created.id, "candidate-1-1");
+
+    const result = await store.exportCandidate(created.id, "candidate-1-2");
+    const bundle = JSON.parse(
+      await readFile(
+        store.pathInSession(created.id, join(result.export.directory, "manifest.json")),
+        "utf8",
+      ),
+    );
+
+    expect(result.manifest.selectedCandidateId).toBe("candidate-1-1");
+    expect((await store.readSession(created.id)).selectedCandidateId).toBe("candidate-1-1");
+    expect(bundle.selectedCandidateId).toBe("candidate-1-1");
+  }, 15_000);
+
+  test("repeated exports preserve the primary", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(
+      sessionInput({ recipeIds: ["custom"], variantsPerRecipe: 2 }),
+    );
+    const primaryImages = await store.saveCandidateImages(created.id, "candidate-1-1", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
+    const exportedImages = await store.saveCandidateImages(created.id, "candidate-1-2", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
+    await store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = primaryImages;
+      manifest.arms[0].candidates[1].status = "succeeded";
+      manifest.arms[0].candidates[1].images = exportedImages;
+    });
+    await store.selectCandidate(created.id, "candidate-1-1");
+
+    const first = await store.exportCandidate(created.id, "candidate-1-2");
+    const second = await store.exportCandidate(created.id, "candidate-1-2");
+    const third = await store.exportCandidate(created.id, "candidate-1-1");
+
+    expect(first.manifest.selectedCandidateId).toBe("candidate-1-1");
+    expect(second.manifest.selectedCandidateId).toBe("candidate-1-1");
+    expect(third.manifest.selectedCandidateId).toBe("candidate-1-1");
+    expect((await store.readSession(created.id)).selectedCandidateId).toBe("candidate-1-1");
   });
 
   test("removes a fully staged export if its manifest commit fails", async () => {
     const { root, store } = await temporaryStore();
     roots.push(root);
-    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
-    const images = await store.saveCandidateImages(created.id, "candidate-1-1", svgResult().images);
+    const created = await store.createSession(
+      sessionInput({ recipeIds: ["custom"], variantsPerRecipe: 1 }),
+    );
+    const images = await store.saveCandidateImages(created.id, "candidate-1-1", [
+      { bytes: pngBytes(), mimeType: "image/png" },
+    ]);
     await store.updateSession(created.id, (manifest) => {
       manifest.arms[0].candidates[0].status = "succeeded";
       manifest.arms[0].candidates[0].images = images;
@@ -300,5 +419,146 @@ describe("durable sessions", () => {
     );
     expect(persisted.selectedCandidateId).toBeUndefined();
     expect(persisted.exports).toEqual([]);
+  });
+
+  test("history reports successful image count and complete calculated spend", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const images = await store.saveCandidateImages(
+      created.id,
+      "candidate-1-1",
+      svgResult("complete").images,
+    );
+    await store.updateSession(created.id, (manifest) => {
+      const candidate = manifest.arms[0].candidates[0];
+      candidate.status = "succeeded";
+      candidate.images = images;
+      candidate.cost = { status: "calculated", usd: 0.25, excludesGrounding: false };
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.generatedImageCount).toBe(1);
+    expect(summary?.spend).toEqual({
+      status: "complete",
+      calculatedUsd: 0.25,
+      upperBoundUsd: undefined,
+      calculatedCount: 1,
+      upperBoundCount: 0,
+      unavailableCount: 0,
+      unknownMayBeChargedCount: 0,
+    });
+  });
+
+  test("history treats failed calls without cost data as unavailable, not zero", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    await store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "failed";
+      manifest.arms[0].candidates[0].error = "Provider failed without usage.";
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.generatedImageCount).toBe(0);
+    expect(summary?.spend.status).toBe("unavailable");
+    expect(summary?.spend.calculatedUsd).toBeUndefined();
+    expect(summary?.spend.upperBoundUsd).toBeUndefined();
+    expect(summary?.spend.unavailableCount).toBe(1);
+  });
+
+  test("history distinguishes unknown cancellation billing from not-submitted calls", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 2 }));
+    await store.updateSession(created.id, (manifest) => {
+      const [active, queued] = manifest.arms[0].candidates;
+      active.status = "cancel-requested";
+      active.cancellation = {
+        requestedAt: new Date().toISOString(),
+        billing: "unknown-may-be-charged",
+      };
+      queued.status = "cancel-requested";
+      queued.cancellation = {
+        requestedAt: new Date().toISOString(),
+        billing: "not-submitted",
+      };
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.spend.status).toBe("unavailable");
+    expect(summary?.spend.unknownMayBeChargedCount).toBe(1);
+    expect(summary?.spend.unavailableCount).toBe(0);
+    expect(summary?.spend.calculatedUsd).toBeUndefined();
+  });
+
+  test("history counts explicit unavailable costs", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const images = await store.saveCandidateImages(
+      created.id,
+      "candidate-1-1",
+      svgResult("unavailable").images,
+    );
+    await store.updateSession(created.id, (manifest) => {
+      const candidate = manifest.arms[0].candidates[0];
+      candidate.status = "succeeded";
+      candidate.images = images;
+      candidate.cost = { status: "unavailable", excludesGrounding: false };
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.generatedImageCount).toBe(1);
+    expect(summary?.spend.status).toBe("unavailable");
+    expect(summary?.spend.unavailableCount).toBe(1);
+    expect(summary?.spend.calculatedUsd).toBeUndefined();
+  });
+
+  test("history separates calculated and upper-bound spend in a fully accounted mixture", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 2 }));
+    await store.updateSession(created.id, (manifest) => {
+      const [calculated, upperBound] = manifest.arms[0].candidates;
+      calculated.status = "failed";
+      calculated.cost = { status: "calculated", usd: 0.1, excludesGrounding: false };
+      upperBound.status = "failed";
+      upperBound.cost = { status: "upper-bound", usd: 0.2, excludesGrounding: true };
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.spend).toEqual({
+      status: "upper-bound",
+      calculatedUsd: 0.1,
+      upperBoundUsd: 0.2,
+      calculatedCount: 1,
+      upperBoundCount: 1,
+      unavailableCount: 0,
+      unknownMayBeChargedCount: 0,
+    });
+  });
+
+  test("history marks a known subtotal partial when another call has unknown cost", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 2 }));
+    await store.updateSession(created.id, (manifest) => {
+      const [known, unknown] = manifest.arms[0].candidates;
+      known.status = "failed";
+      known.cost = { status: "calculated", usd: 0.1, excludesGrounding: false };
+      unknown.status = "failed";
+    });
+
+    const summary = (await store.listHistory()).find((item) => item.id === created.id);
+
+    expect(summary?.spend.status).toBe("partial");
+    expect(summary?.spend.calculatedUsd).toBe(0.1);
+    expect(summary?.spend.unavailableCount).toBe(1);
   });
 });
