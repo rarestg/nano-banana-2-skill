@@ -169,6 +169,44 @@ describe("workbench browser contract", () => {
       await customImage.check();
       expect(await paletteLayout()).toEqual(airyLayout);
     }
+
+    expect(
+      await page
+        .locator('input[name="recipe"]')
+        .evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value)),
+    ).toEqual([
+      "airy-pastel-modernist",
+      "hard-edge-geometric-screenprint",
+      "ornamental-miniature-maximalism",
+      "tenebrist-oil-realism",
+      "custom",
+    ]);
+    for (const [width, columns] of [
+      [1440, 5],
+      [1100, 3],
+      [760, 3],
+      [390, 1],
+    ] as const) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(
+        await page
+          .locator(".recipe-grid")
+          .evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length),
+      ).toBe(columns);
+      expect(
+        await page.locator(".recipe-grid").evaluate((grid) => grid.scrollWidth <= grid.clientWidth),
+      ).toBe(true);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await airy.check();
+    await page.locator('input[name="recipe"][value="hard-edge-geometric-screenprint"]').check();
+    await page.locator('input[name="recipe"][value="ornamental-miniature-maximalism"]').check();
+    await page.locator('input[name="recipe"][value="tenebrist-oil-realism"]').click();
+    expect(await page.locator('input[name="recipe"]:checked').count()).toBe(3);
+    expect(await page.locator("#recipe-feedback").textContent()).toBe(
+      "Choose up to three style recipes per run.",
+    );
   });
 
   test("uses a collapsed history rail, accessible candidate identity, and a no-scroll contact sheet", async () => {
@@ -215,7 +253,7 @@ describe("workbench browser contract", () => {
       0,
     );
     await page.locator('input[name="output-family"][value="image"]').check();
-    expect(await page.locator('input[name="recipe"]').count()).toBe(2);
+    expect(await page.locator('input[name="recipe"]').count()).toBe(5);
     expect(
       await page.locator('input[name="recipe"][value="airy-pastel-modernist"]').isChecked(),
     ).toBe(true);

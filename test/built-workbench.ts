@@ -60,7 +60,7 @@ try {
     !root.ok ||
     !styles.ok ||
     !bootstrap.ok ||
-    body.recipes?.length !== 6 ||
+    body.recipes?.length !== 9 ||
     body.palettes?.length !== 7 ||
     !body.models?.length
   ) {

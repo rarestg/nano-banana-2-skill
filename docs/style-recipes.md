@@ -23,6 +23,12 @@ curated palette. The Workbench stores the recipe and palette snapshots, rendered
 prompt, and SHA-256 of each recipe and prompt in the session manifest. It does
 not silently rewrite or improve the brief.
 
+Every `kind: "artwork"` recipe also receives the shared full-frame artwork
+modifier during prompt rendering. Keep physical-canvas, page-edge, frame, wall,
+photograph, and mockup exclusions in that modifier rather than repeating them in
+individual artwork templates. Custom recipes do not receive it because their
+subject is the complete prompt.
+
 ## Folio production language
 
 `recipes/folio-geometric-isometric.json` is the source of truth for the current

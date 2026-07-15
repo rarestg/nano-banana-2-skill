@@ -55,6 +55,9 @@ Built-in recipes:
 - Folio flat cut-paper.
 - Folio restrained screenprint.
 - Airy pastel modernist: luminous, tactile illustration on toothy paper.
+- Tenebrist oil realism: dark, theatrical volume shaped by concentrated light.
+- Hard-edge geometric screenprint: exact flat shapes and modernist graphic structure.
+- Ornamental miniature maximalism: disciplined intricacy, pattern, and jewel-like color.
 - Custom image: the subject field is the complete prompt with raw output.
 - Custom icon: the subject field is the complete prompt with circular icon export.
 

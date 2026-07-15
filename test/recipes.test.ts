@@ -4,10 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { COLOR_PALETTES } from "../src/workbench/palettes";
-import { loadRecipes, recipeFamily, renderRecipe } from "../src/workbench/recipes";
+import {
+  FULL_FRAME_ARTWORK_MODIFIER,
+  loadRecipes,
+  recipeFamily,
+  renderRecipe,
+} from "../src/workbench/recipes";
 
 describe("provider-neutral recipes", () => {
-  test("ships six built-in image and icon recipes", async () => {
+  test("ships nine built-in image and icon recipes", async () => {
     const recipes = await loadRecipes();
     expect(recipes.map((recipe) => recipe.id)).toEqual([
       "airy-pastel-modernist",
@@ -16,8 +21,11 @@ describe("provider-neutral recipes", () => {
       "folio-flat-cut-paper",
       "folio-geometric-isometric",
       "folio-restrained-screenprint",
+      "hard-edge-geometric-screenprint",
+      "ornamental-miniature-maximalism",
+      "tenebrist-oil-realism",
     ]);
-    expect(recipes.filter((recipe) => recipe.comparable)).toHaveLength(4);
+    expect(recipes.filter((recipe) => recipe.comparable)).toHaveLength(7);
     expect(recipes.filter((recipe) => recipe.kind === "custom")).toHaveLength(2);
     expect(
       recipes.filter((recipe) => recipe.kind === "custom").every((recipe) => !recipe.comparable),
@@ -29,6 +37,9 @@ describe("provider-neutral recipes", () => {
       "folio-flat-cut-paper": "icon",
       "folio-geometric-isometric": "icon",
       "folio-restrained-screenprint": "icon",
+      "hard-edge-geometric-screenprint": "image",
+      "ornamental-miniature-maximalism": "image",
+      "tenebrist-oil-realism": "image",
     });
   });
 
@@ -49,6 +60,16 @@ describe("provider-neutral recipes", () => {
     expect(renderRecipe(customIcon, "Exact custom icon prompt", palette)).toBe(
       "Exact custom icon prompt",
     );
+  });
+
+  test("appends the shared full-frame modifier only to artwork recipes", async () => {
+    const recipes = await loadRecipes();
+    const palette = COLOR_PALETTES[0];
+    for (const recipe of recipes) {
+      const rendered = renderRecipe(recipe, "A subject.", palette);
+      const occurrences = rendered.split(FULL_FRAME_ARTWORK_MODIFIER).length - 1;
+      expect(occurrences).toBe(recipe.kind === "artwork" ? 1 : 0);
+    }
   });
 
   test("does not expand prompt variables inside custom or styled subjects", async () => {

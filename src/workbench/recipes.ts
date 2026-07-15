@@ -36,6 +36,9 @@ export function recipeFamily(recipe: Recipe): "image" | "icon" {
 
 const defaultRecipeDirectory = join(packageRoot(), "recipes");
 
+export const FULL_FRAME_ARTWORK_MODIFIER =
+  "Render only the finished artwork itself as a clean, full-frame image. Do not show a physical canvas, manuscript, page, book, print, poster, frame, wall, studio, photograph, or presentation mockup. Show no physical page edges, borders, cast shadows, or surrounding presentation context. Any ornamental border must be an intentional element inside the artwork itself, not the visible edge of a physical sheet.";
+
 function assertRecipe(value: unknown, path: string): asserts value is Recipe {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`Invalid recipe: ${path}`);
@@ -164,7 +167,11 @@ export async function loadRecipes(directory = defaultRecipeDirectory) {
 }
 
 export function renderRecipe(recipe: Recipe, subject: string, palette: ColorPalette) {
-  return recipe.promptTemplate.replace(/{{subject}}|{{colorPalette}}/g, (variable) =>
+  const template =
+    recipe.kind === "artwork"
+      ? `${recipe.promptTemplate}\n\n${FULL_FRAME_ARTWORK_MODIFIER}`
+      : recipe.promptTemplate;
+  return template.replace(/{{subject}}|{{colorPalette}}/g, (variable) =>
     variable === "{{subject}}" ? subject.trim() : palettePrompt(palette),
   );
 }

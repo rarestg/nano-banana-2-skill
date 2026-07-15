@@ -118,6 +118,8 @@ function renderRecipes() {
   const recipes = state.bootstrap.recipes.filter(
     (recipe) => familyForRecipe(recipe) === state.recipeFamily,
   );
+  recipes.sort((left, right) => Number(left.kind === "custom") - Number(right.kind === "custom"));
+  $("#recipe-options").dataset.family = state.recipeFamily;
   $("#recipe-options").innerHTML = recipes
     .map(
       (recipe) => `<label class="recipe-option">
