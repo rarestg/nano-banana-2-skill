@@ -452,6 +452,25 @@ small {
   overflow-y: auto;
 }
 
+@media (min-width: 681px) {
+  .history-drawer {
+    position: absolute;
+    top: 36px;
+    height: calc(100dvh - 132px);
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+
+  .history-list {
+    min-height: 0;
+    grid-auto-rows: max-content;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+}
+
 .history-clear-row {
   margin-top: var(--space-4);
   padding-top: var(--space-3);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type Browser, type BrowserContext, chromium, type Page, type Request } from "playwright";
 
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
-import { pngBytes } from "./helpers";
+import { pngBytes, sessionInput } from "./helpers";
 
 let browser: Browser;
 const cleanup: Array<() => Promise<void>> = [];
@@ -230,14 +230,24 @@ describe("workbench browser contract", () => {
     expect(await page.locator("#history-toggle").getAttribute("title")).toBe("Hide history");
     expect(await page.locator(".history-item").getAttribute("aria-current")).toBe("true");
     const drawerStyle = await page.locator("#history-drawer").evaluate((drawer) => ({
-      maxHeight: Number.parseFloat(getComputedStyle(drawer).maxHeight),
+      height: Number.parseFloat(getComputedStyle(drawer).height),
+      maxHeight: getComputedStyle(drawer).maxHeight,
       overflowY: getComputedStyle(drawer).overflowY,
     }));
     expect(drawerStyle).toEqual({
-      maxHeight: await page.evaluate(() => innerHeight - 96),
-      overflowY: "auto",
+      height: await page.evaluate(() => innerHeight - 132),
+      maxHeight: "none",
+      overflowY: "hidden",
     });
+    expect(
+      await page.locator("#history-list").evaluate((list) => getComputedStyle(list).overflowY),
+    ).toBe("auto");
     await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+      await page
+        .locator("#history-drawer")
+        .evaluate((drawer) => getComputedStyle(drawer).overflowY),
+    ).toBe("auto");
     expect(
       new Set(
         await page
@@ -252,6 +262,147 @@ describe("workbench browser contract", () => {
         () => document.documentElement.scrollWidth === document.documentElement.clientWidth,
       ),
     ).toBe(true);
+  }, 30_000);
+
+  test("contains long desktop history without resizing the workbench", async () => {
+    const { instance, page } = await openWorkbench({}, { width: 1600, height: 900 });
+    for (let index = 1; index <= 24; index++) {
+      await instance.store.createSession(
+        sessionInput({ subject: `History session ${index}.`, variantsPerRecipe: 1 }),
+      );
+    }
+
+    await page.click("#history-toggle");
+    await page.click("#history-refresh");
+    await page.waitForFunction(() => document.querySelectorAll(".history-item").length === 24);
+    expect(await page.locator(".history-item").count()).toBe(24);
+    expect(
+      await page
+        .locator(".history-item")
+        .first()
+        .evaluate((item) => item.scrollHeight),
+    ).toBe(
+      await page
+        .locator(".history-item")
+        .first()
+        .evaluate((item) => item.clientHeight),
+    );
+    await page.click("#history-toggle");
+
+    const viewportSizes = [
+      { width: 1600, height: 900 },
+      { width: 1100, height: 900 },
+      { width: 1600, height: 700 },
+      { width: 1100, height: 700 },
+    ];
+    for (const viewport of viewportSizes) {
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => scrollTo(0, 0));
+      const closed = await page.evaluate(() => ({
+        document: document.documentElement.scrollHeight,
+        editor: document.querySelector(".editor")?.getBoundingClientRect().height,
+        workspace: document.querySelector(".workspace")?.getBoundingClientRect().height,
+      }));
+
+      await page.click("#history-toggle");
+      const open = await page.evaluate(() => ({
+        document: document.documentElement.scrollHeight,
+        editor: document.querySelector(".editor")?.getBoundingClientRect().height,
+        workspace: document.querySelector(".workspace")?.getBoundingClientRect().height,
+      }));
+      expect(open).toEqual(closed);
+
+      const containment = await page.evaluate(() => {
+        const drawer = document.querySelector("#history-drawer");
+        const list = document.querySelector("#history-list");
+        const clear = document.querySelector("#history-clear");
+        if (
+          !(
+            drawer instanceof HTMLElement &&
+            list instanceof HTMLElement &&
+            clear instanceof HTMLElement
+          )
+        ) {
+          throw new Error("History controls are missing");
+        }
+        const drawerRect = drawer.getBoundingClientRect();
+        const clearRect = clear.getBoundingClientRect();
+        return {
+          clearBottom: clearRect.bottom,
+          clearTop: clearRect.top,
+          drawerBottom: drawerRect.bottom,
+          drawerClientHeight: drawer.clientHeight,
+          drawerScrollHeight: drawer.scrollHeight,
+          listClientHeight: list.clientHeight,
+          listScrollHeight: list.scrollHeight,
+          viewportHeight: innerHeight,
+        };
+      });
+      expect(containment.drawerBottom).toBeLessThanOrEqual(containment.viewportHeight);
+      expect(containment.clearTop).toBeGreaterThanOrEqual(0);
+      expect(containment.clearBottom).toBeLessThanOrEqual(containment.drawerBottom);
+      expect(containment.drawerScrollHeight).toBe(containment.drawerClientHeight);
+      expect(containment.listScrollHeight).toBeGreaterThan(containment.listClientHeight);
+
+      const footerTop = await page
+        .locator(".history-clear-row")
+        .evaluate((footer) => footer.getBoundingClientRect().top);
+      await page.locator("#history-list").evaluate((list) => {
+        list.scrollTop = list.scrollHeight;
+      });
+      expect(
+        await page
+          .locator(".history-clear-row")
+          .evaluate((footer) => footer.getBoundingClientRect().top),
+      ).toBe(footerTop);
+
+      await page.click("#history-toggle");
+    }
+
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.click("#history-toggle");
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.click("#history-clear");
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe("history-clear");
+
+    await page.locator(".setup-details").evaluate((details: HTMLDetailsElement) => {
+      details.open = true;
+    });
+    await page.locator("#history-list").evaluate((list) => {
+      list.scrollTop = list.scrollHeight;
+    });
+    const listScrollTop = await page.locator("#history-list").evaluate((list) => list.scrollTop);
+    await page.locator(".editor").hover({ position: { x: 400, y: 300 } });
+    await page.mouse.wheel(0, 300);
+    await page.waitForTimeout(100);
+    expect(await page.locator("#history-list").evaluate((list) => list.scrollTop)).toBe(
+      listScrollTop,
+    );
+
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+    const historyListBox = await page.locator("#history-list").boundingBox();
+    if (!historyListBox) throw new Error("History list is not visible");
+    const historyListPoint = {
+      x: historyListBox.x + historyListBox.width / 2,
+      y: historyListBox.y + historyListBox.height / 2,
+    };
+    await page.mouse.move(historyListPoint.x, historyListPoint.y);
+    expect(
+      await page.evaluate(
+        ({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest("#history-list")),
+        historyListPoint,
+      ),
+    ).toBe(true);
+    expect(
+      await page
+        .locator("#history-list")
+        .evaluate((list) => getComputedStyle(list).overscrollBehaviorY),
+    ).toBe("contain");
+    await page.mouse.wheel(0, 300);
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(() => scrollY)).toBe(0);
   }, 30_000);
 
   test("keeps desktop candidate sheets on four equal tracks", async () => {
