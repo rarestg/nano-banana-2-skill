@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type Browser, type BrowserContext, chromium, type Page, type Request } from "playwright";
 
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
-import { pngBytes, sessionInput } from "./helpers";
+import { pngBytes, sessionInput, svgResult } from "./helpers";
 
 let browser: Browser;
 const cleanup: Array<() => Promise<void>> = [];
@@ -95,6 +95,11 @@ describe("workbench browser contract", () => {
 
     expect(await page.locator("#history-toggle").getAttribute("aria-expanded")).toBe("false");
     expect(await page.locator("#history-toggle").getAttribute("title")).toBe("Show history");
+    expect(
+      await page
+        .locator(".history-toggle-label")
+        .evaluate((label) => getComputedStyle(label).clipPath),
+    ).toBe("inset(50%)");
     expect(await page.locator("#history-drawer").isHidden()).toBe(true);
     expect(await page.locator("#theme-toggle").getAttribute("aria-pressed")).toBe("false");
     expect(await page.locator("#theme-toggle").getAttribute("aria-label")).toBe(
@@ -245,6 +250,12 @@ describe("workbench browser contract", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page
+        .locator(".history-toggle-label")
+        .evaluate((label) => getComputedStyle(label).clipPath),
+    ).toBe("none");
+    expect(await page.locator(".history-toggle-label").isVisible()).toBe(true);
+    expect(
+      await page
         .locator("#history-drawer")
         .evaluate((drawer) => getComputedStyle(drawer).overflowY),
     ).toBe("auto");
@@ -257,6 +268,18 @@ describe("workbench browser contract", () => {
           ),
       ).size,
     ).toBe(4);
+    expect(await page.locator("#key-status").isVisible()).toBe(true);
+    expect(await page.locator("#spend-toggle").isVisible()).toBe(true);
+    expect(await page.locator("#theme-toggle").isVisible()).toBe(true);
+    await page.click("#spend-toggle");
+    expect(await page.locator("#spend-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(await page.locator("#spend-breakdown").isVisible()).toBe(true);
+    const spendBounds = await page.locator("#spend-breakdown").boundingBox();
+    expect(spendBounds).not.toBeNull();
+    expect(spendBounds?.x).toBeGreaterThanOrEqual(0);
+    expect((spendBounds?.x ?? 0) + (spendBounds?.width ?? 0)).toBeLessThanOrEqual(390);
+    expect(spendBounds?.y).toBeGreaterThanOrEqual(0);
+    expect((spendBounds?.y ?? 0) + (spendBounds?.height ?? 0)).toBeLessThanOrEqual(844);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth === document.documentElement.clientWidth,
@@ -580,26 +603,41 @@ describe("workbench browser contract", () => {
     await page.locator('[data-export-select="candidate-1-2"]').check();
 
     const requested: string[] = [];
+    let releaseSecond!: () => void;
+    const secondPaused = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let confirmSecondStarted!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      confirmSecondStarted = resolve;
+    });
     await page.route("**/export", async (route, request) => {
       const candidateId = (request.postDataJSON() as { candidateId: string }).candidateId;
       requested.push(candidateId);
-      if (candidateId === "candidate-1-2") {
+      if (candidateId === "candidate-1-1") {
         return route.fulfill({
           status: 500,
           contentType: "application/json",
           body: JSON.stringify({ error: { message: "Deliberate export failure" } }),
         });
       }
+      confirmSecondStarted();
+      await secondPaused;
       await route.continue();
     });
     await page.locator("[data-export-selected]").click();
+    await secondStarted;
+    expect(await page.locator("#session-message").textContent()).toBe(
+      "Exporting 1 of 2 selected candidates…",
+    );
+    releaseSecond();
     await page.waitForFunction(() =>
       document.querySelector("#session-message")?.textContent?.includes("Exported 1 of 2"),
     );
     await page.unroute("**/export");
     expect(requested).toEqual(["candidate-1-1", "candidate-1-2"]);
     expect(await page.locator("#session-message").textContent()).toContain(
-      "1 failed: Folio geometric isometric → Partial export feedback. → Variant 2 of 2: Deliberate export failure",
+      "1 failed: Folio geometric isometric → Partial export feedback. → Variant 1 of 2: Deliberate export failure",
     );
     expect(await page.locator('[data-export-select="candidate-1-1"]').isChecked()).toBe(true);
     expect(await page.locator('[data-export-select="candidate-1-2"]').isChecked()).toBe(true);
@@ -610,9 +648,12 @@ describe("workbench browser contract", () => {
     const second = new Promise<void>((resolve) => {
       failSecond = resolve;
     });
+    let invocation = 0;
     const { instance, page } = await openWorkbench({
       mock: false,
       runner: async () => {
+        invocation++;
+        if (invocation === 1) return svgResult("successful first variant");
         await second;
         throw new Error("deliberate second-variant failure");
       },
@@ -627,28 +668,10 @@ describe("workbench browser contract", () => {
     });
     await page.fill("#variants", "2");
     await page.click("#generate-button");
-    await page.waitForSelector(
-      '[data-candidate="candidate-1-1"] .candidate-label span:text-is("Running")',
-    );
+    await page.waitForSelector('[data-candidate="candidate-1-1"] img');
     await page.waitForSelector(
       '[data-candidate="candidate-1-2"] .candidate-label span:text-is("Running")',
     );
-    await instance.store.updateSession((await instance.store.listHistory())[0].id, (manifest) => {
-      const candidate = manifest.arms[0].candidates[0];
-      candidate.status = "succeeded";
-      candidate.completedAt = new Date().toISOString();
-      candidate.images = [
-        {
-          path: "polling-fixture.png",
-          mimeType: "image/png",
-          bytes: pngBytes().length,
-          width: 1,
-          height: 1,
-          sha256: "polling-fixture",
-        },
-      ];
-    });
-    await page.waitForSelector('[data-candidate="candidate-1-1"] img');
     await page.locator('[data-export-select="candidate-1-1"]').check();
     await page.locator('[data-focus-candidate="candidate-1-2"]').click();
     expect(
@@ -713,6 +736,8 @@ describe("workbench browser contract", () => {
         .evaluate((element) => getComputedStyle(element).animationName),
     ).toBe("none");
     const stored = await instance.store.readSession((await instance.store.listHistory())[0].id);
+    expect(stored.arms[0].candidates[0].status).toBe("succeeded");
+    expect(stored.arms[0].candidates[1].status).toBe("failed");
     expect(stored.arms[0].candidates[1].error).toContain("deliberate second-variant failure");
   }, 30_000);
 
@@ -799,6 +824,13 @@ describe("workbench browser contract", () => {
     await page.waitForTimeout(1100);
     expect(pollCount).toBeGreaterThan(activePollCount);
 
+    await page.route("**/api/history", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "Terminal history refresh failed" } }),
+      }),
+    );
     await instance.store.updateSession(sessionId, (manifest) => {
       const candidate = manifest.arms[0].candidates[1];
       candidate.status = "interrupted";
@@ -837,8 +869,16 @@ describe("workbench browser contract", () => {
     expect(await page.locator("#cancel").isHidden()).toBe(true);
     expect(await page.locator("#regenerate").textContent()).toBe("Edit and regenerate");
     await page.waitForFunction(() =>
-      document.querySelector(".history-item small")?.textContent?.startsWith("Interrupted"),
+      document
+        .querySelector("#history-list")
+        ?.textContent?.includes("Terminal history refresh failed"),
     );
+    expect(await page.locator("#session-message").textContent()).not.toContain(
+      "Terminal history refresh failed",
+    );
+    expect(
+      await page.locator('[data-candidate="candidate-1-2"] .candidate-label span').textContent(),
+    ).toBe("Interrupted");
     const terminalPollCount = pollCount;
     await page.waitForTimeout(1200);
     expect(pollCount).toBe(terminalPollCount);
@@ -848,6 +888,7 @@ describe("workbench browser contract", () => {
     expect(
       await page.locator("#subject").evaluate((element) => document.activeElement === element),
     ).toBe(true);
+    await page.unroute("**/api/history");
   }, 30_000);
 
   test("shows concise recovery copy for raw provider failures", async () => {
@@ -992,11 +1033,74 @@ describe("workbench browser contract", () => {
     await page.unroute("**/api/history");
   }, 30_000);
 
+  test("preserves the current session when a different history entry disappears", async () => {
+    const { instance, page } = await openWorkbench();
+    await generate(page, "Missing history entry.", 1);
+    await page.click("#edit-setup");
+    await generate(page, "Current session stays visible.", 2);
+    await page.locator('[data-export-select="candidate-1-1"]').check();
+    await page.locator('[data-focus-candidate="candidate-1-2"]').click();
+    await page.click("#history-toggle");
+
+    const missing = page.locator('.history-item:has-text("Missing history entry.")');
+    const current = page.locator('.history-item:has-text("Current session stays visible.")');
+    const missingId = await missing.getAttribute("data-session");
+    expect(missingId).toBeTruthy();
+    if (!missingId) throw new Error("Missing history fixture was not found.");
+
+    let historyRefreshes = 0;
+    await page.route(`**/api/sessions/${missingId}`, (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "session_not_found", message: "Session not found." },
+        }),
+      }),
+    );
+    await page.route("**/api/history", async (route) => {
+      historyRefreshes++;
+      const sessions = (await instance.store.listHistory()).filter(
+        (session) => session.id !== missingId,
+      );
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ sessions }),
+      });
+    });
+
+    await missing.click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#history-list")
+        ?.textContent?.includes("Current session stays visible."),
+    );
+    await page.waitForFunction(
+      () =>
+        !document.querySelector("#history-list")?.textContent?.includes("Missing history entry."),
+    );
+    expect(historyRefreshes).toBe(1);
+    expect(await page.locator("#session-title").textContent()).toBe(
+      "Current session stays visible.",
+    );
+    expect(await page.locator('[data-export-select="candidate-1-1"]').isChecked()).toBe(true);
+    expect(await page.locator("#candidate-inspector .identity-path").textContent()).toContain(
+      "Variant 2 of 2",
+    );
+    expect(await current.getAttribute("aria-current")).toBe("true");
+    expect(await page.locator("#form-error").textContent()).toBe("");
+    expect(await page.locator("#session-message").textContent()).toBe("");
+    await page.unroute(`**/api/sessions/${missingId}`);
+    await page.unroute("**/api/history");
+  }, 30_000);
+
   test("ignores stale generation and cancellation failures after switching sessions", async () => {
     const { page } = await openWorkbench();
     await generate(page, "Stable session A.", 1);
     await page.click("#edit-setup");
     await generate(page, "Stable session B.", 1);
+    await page.locator('[data-export-select="candidate-1-1"]').check();
+    expect(await page.locator("#export-tray").isVisible()).toBe(true);
     await page.click("#edit-setup");
 
     let releaseGeneration!: () => void;
@@ -1007,8 +1111,10 @@ describe("workbench browser contract", () => {
     const generationStarted = new Promise<void>((resolve) => {
       confirmGenerationPaused = resolve;
     });
+    let createRequests = 0;
     await page.route("**/api/sessions", async (route, request) => {
       if (request.method() !== "POST") return route.continue();
+      createRequests++;
       confirmGenerationPaused();
       await generationPaused;
       return route.fulfill({
@@ -1020,6 +1126,13 @@ describe("workbench browser contract", () => {
     await page.fill("#subject", "Superseded generation.");
     await page.click("#generate-button");
     await generationStarted;
+    expect(await page.locator("#generate-button").isDisabled()).toBe(true);
+    expect(await page.locator("#generate-button").textContent()).toBe("Generating…");
+    expect(await page.locator("#export-tray").isHidden()).toBe(true);
+    expect(await page.locator(".history-item[aria-current]").count()).toBe(0);
+    expect(await page.locator("#regenerate").isDisabled()).toBe(true);
+    expect(await page.locator("#cancel").isDisabled()).toBe(true);
+    expect(await page.locator("#edit-setup").isDisabled()).toBe(true);
     await page.click("#history-toggle");
     const sessionA = page.locator('.history-item:has-text("Stable session A.")');
     const sessionB = page.locator('.history-item:has-text("Stable session B.")');
@@ -1027,14 +1140,26 @@ describe("workbench browser contract", () => {
     await page.waitForFunction(
       () => document.querySelector("#session-title")?.textContent === "Stable session A.",
     );
+    expect(await page.locator("#generate-button").isDisabled()).toBe(true);
+    expect(await page.locator("#generate-button").textContent()).toBe("Generating…");
+    await page
+      .locator("#generation-form")
+      .evaluate((form: HTMLFormElement) => form.requestSubmit());
+    await page.waitForTimeout(100);
+    expect(createRequests).toBe(1);
     releaseGeneration();
-    await page.waitForTimeout(250);
+    await page.waitForFunction(
+      () =>
+        document.querySelector<HTMLButtonElement>("#generate-button")?.textContent === "Generate" &&
+        !document.querySelector<HTMLButtonElement>("#generate-button")?.disabled,
+    );
     expect(await page.locator("#session-view").isVisible()).toBe(true);
     expect(await page.locator("#session-title").textContent()).toBe("Stable session A.");
     expect(await page.locator("#form-error").textContent()).not.toContain(
       "Stale generation failure",
     );
     expect(await page.locator("#generate-button").textContent()).toBe("Generate");
+    expect(createRequests).toBe(1);
     await page.unroute("**/api/sessions");
 
     let releaseCancellation!: () => void;

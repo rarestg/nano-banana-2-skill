@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCommand } from "../src/image-tools";
@@ -498,9 +499,13 @@ describe("durable sessions", () => {
     roots.push(root);
     await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
     await rm(store.sessionsRoot, { recursive: true, force: true });
-    await symlink("/tmp", store.sessionsRoot);
+    const target = await mkdtemp(join(tmpdir(), "nano-banana-clear-target-"));
+    roots.push(target);
+    const sentinel = join(target, "sentinel");
+    await writeFile(sentinel, "preserve");
+    await symlink(target, store.sessionsRoot);
     await expect(store.clearAllSessions()).rejects.toMatchObject({ code: "unsafe_storage_path" });
-    expect(existsSync("/tmp")).toBe(true);
+    expect(await readFile(sentinel, "utf8")).toBe("preserve");
   });
 
   test("reports corrupt history and still clears its physical session", async () => {
@@ -702,6 +707,39 @@ describe("durable sessions", () => {
     });
 
     await expect(store.listHistory()).rejects.toMatchObject({ code: "history_read_failed" });
+  });
+
+  test("rejects an unknown cost status in a stored manifest", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const manifestPath = store.pathInSession(created.id, "manifest.json");
+    const persisted = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      arms: Array<{ candidates: Array<Record<string, unknown>> }>;
+    };
+    persisted.arms[0].candidates[0].cost = {
+      status: "unknown",
+      excludesGrounding: false,
+    };
+    await writeFile(manifestPath, JSON.stringify(persisted));
+
+    await expect(store.listHistory()).rejects.toMatchObject({ code: "history_read_failed" });
+  });
+
+  test("rejects calculated and upper-bound stored costs without USD", async () => {
+    for (const status of ["calculated", "upper-bound"]) {
+      const { root, store } = await temporaryStore();
+      roots.push(root);
+      const created = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+      const manifestPath = store.pathInSession(created.id, "manifest.json");
+      const persisted = JSON.parse(await readFile(manifestPath, "utf8")) as {
+        arms: Array<{ candidates: Array<Record<string, unknown>> }>;
+      };
+      persisted.arms[0].candidates[0].cost = { status, excludesGrounding: false };
+      await writeFile(manifestPath, JSON.stringify(persisted));
+
+      await expect(store.listHistory()).rejects.toMatchObject({ code: "history_read_failed" });
+    }
   });
 
   test("history marks a known subtotal partial when another call has unknown cost", async () => {

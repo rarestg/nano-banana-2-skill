@@ -946,10 +946,17 @@ export class SessionStore {
                     !Array.isArray(candidate.images) ||
                     (candidate.cost !== undefined &&
                       (typeof candidate.cost !== "object" ||
+                        candidate.cost === null ||
+                        !["calculated", "upper-bound", "unavailable"].includes(
+                          candidate.cost.status,
+                        ) ||
                         typeof candidate.cost.excludesGrounding !== "boolean" ||
                         candidate.cost.excludesGrounding !== manifest.settings.googleSearch ||
-                        (candidate.cost.usd !== undefined &&
-                          !Number.isFinite(candidate.cost.usd)))),
+                        ((candidate.cost.status === "calculated" ||
+                          candidate.cost.status === "upper-bound") &&
+                          !Number.isFinite(candidate.cost.usd)) ||
+                        (candidate.cost.status === "unavailable" &&
+                          candidate.cost.usd !== undefined))),
                 ),
             )
           ) {

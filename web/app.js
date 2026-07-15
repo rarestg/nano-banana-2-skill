@@ -9,6 +9,7 @@ const state = {
   focusedCandidateId: undefined,
   exportSelectedIds: new Set(),
   exporting: false,
+  creating: false,
   historyCount: 0,
   historyUnavailable: false,
   epoch: 0,
@@ -715,8 +716,8 @@ function renderLoadingSession(subject) {
 }
 
 function resetGenerateButton() {
-  $("#generate-button").textContent = "Generate";
-  $("#generate-button").disabled = !state.bootstrap.keyConfigured;
+  $("#generate-button").textContent = state.creating ? "Generating…" : "Generate";
+  $("#generate-button").disabled = state.creating || !state.bootstrap.keyConfigured;
 }
 
 function transitionToResults() {
@@ -745,12 +746,18 @@ async function refreshSession(sessionId, fromPoll = false) {
     }
     renderSession(result.session);
     if (!fromPoll) transitionToResults();
-    if (fromPoll && !["queued", "running"].includes(result.session.status)) await loadHistory();
+    if (fromPoll && !["queued", "running"].includes(result.session.status)) {
+      await loadHistory().catch(renderHistoryError);
+    }
   } catch (error) {
     if (state.epoch !== epoch) return;
     if (!fromPoll && state.sessionLoadIntent !== intent) return;
     if (fromPoll && state.currentSession?.id !== sessionId) return;
     if (error.code === "session_not_found") {
+      if (!fromPoll && state.currentSession && state.currentSession.id !== sessionId) {
+        await loadHistory().catch(renderHistoryError);
+        return;
+      }
       const vanishedSession = state.currentSession;
       if (vanishedSession) loadSessionIntoForm(vanishedSession);
       resetResultsView({ hide: true });
@@ -961,6 +968,7 @@ async function exportSelected() {
   renderExportTray();
   showSessionMessage(`Exporting 0 of ${candidateIds.length} selected candidates…`);
   let succeeded = 0;
+  let completed = 0;
   const failures = [];
   let latestSession = state.currentSession;
   for (const candidateId of candidateIds) {
@@ -968,15 +976,17 @@ async function exportSelected() {
       const result = await requestExport(sessionId, candidateId);
       latestSession = result.manifest;
       succeeded++;
-      if (state.currentSession?.id === sessionId) {
-        showSessionMessage(`Exporting ${succeeded} of ${candidateIds.length} selected candidates…`);
-      }
     } catch (error) {
       const found = findCandidate(latestSession, candidateId);
       const identity = found
         ? candidateIdentity(latestSession, found.arm, found.candidate)
         : "Unknown candidate";
       failures.push(`${identity}: ${error.message}`);
+    } finally {
+      completed++;
+      if (state.currentSession?.id === sessionId) {
+        showSessionMessage(`Exporting ${completed} of ${candidateIds.length} selected candidates…`);
+      }
     }
   }
   state.exporting = false;
@@ -1042,6 +1052,7 @@ function loadSessionIntoForm(session) {
 
 async function submitGeneration(event) {
   event.preventDefault();
+  if (state.creating) return;
   $("#form-error").textContent = "";
   const recipeIds = selectedRecipeIds();
   if (!recipeIds.length) return;
@@ -1060,14 +1071,15 @@ async function submitGeneration(event) {
   const form = new FormData();
   form.set("payload", JSON.stringify(payload));
   for (const file of state.references) form.append("references", file, file.name);
-  const generateButton = $("#generate-button");
-  generateButton.disabled = true;
-  generateButton.textContent = "Generating…";
+  state.creating = true;
+  resetGenerateButton();
   renderLoadingSession(payload.subject);
   const intent = state.sessionLoadIntent;
   transitionToResults();
   try {
     const result = await api("/api/sessions", { method: "POST", body: form });
+    state.creating = false;
+    resetGenerateButton();
     if (state.sessionLoadIntent !== intent) return;
     renderSession(result.session);
     transitionToResults();
@@ -1078,7 +1090,10 @@ async function submitGeneration(event) {
     $("#form-error").textContent = error.message;
     if (error.code === "confirmation_required") $("#confirmation-row").classList.remove("hidden");
   } finally {
-    if (state.sessionLoadIntent === intent) resetGenerateButton();
+    if (state.creating) {
+      state.creating = false;
+      resetGenerateButton();
+    }
   }
 }
 
