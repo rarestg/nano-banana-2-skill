@@ -315,6 +315,49 @@ describe("local server safety", () => {
     expect((await historyResponse.json()).sessions[0].status).toBe("interrupted");
   });
 
+  test("downloads selected final assets as a ZIP without recording an export", async () => {
+    const { instance, origin } = await server();
+    const created = await instance.store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const generated = svgResult("browser download");
+    const images = await instance.store.saveCandidateImages(
+      created.id,
+      "candidate-1-1",
+      generated.images,
+    );
+    await instance.store.updateSession(created.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    const before = await instance.store.readSession(created.id);
+    const response = await fetch(
+      `${origin}/api/sessions/${created.id}/download?candidateId=candidate-1-1`,
+      { headers: { "x-workbench-token": instance.token } },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/zip");
+    expect(response.headers.get("content-disposition")).toBe(
+      `attachment; filename="nano-banana-${created.id}.zip"`,
+    );
+    const archive = new Uint8Array(await response.arrayBuffer());
+    expect([...archive.slice(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+    const text = new TextDecoder().decode(archive);
+    expect(text).toContain("01-folio-geometric-isometric-variant-1.png");
+    expect(text).toContain("manifest.txt");
+    expect(text).toContain("Folio geometric isometric");
+    expect(await instance.store.readSession(created.id)).toEqual(before);
+
+    const duplicate = await fetch(
+      `${origin}/api/sessions/${created.id}/download?candidateId=candidate-1-1&candidateId=candidate-1-1`,
+      { headers: { "x-workbench-token": instance.token } },
+    );
+    expect(duplicate.status).toBe(400);
+    const unknownField = await fetch(
+      `${origin}/api/sessions/${created.id}/download?candidateId=candidate-1-1&extra=true`,
+      { headers: { "x-workbench-token": instance.token } },
+    );
+    expect(unknownField.status).toBe(400);
+  });
+
   function createSessionForm(subject: string) {
     const form = new FormData();
     form.set(

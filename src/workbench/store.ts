@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { exportCircularProjectIcon, imageDimensions, validateImageBytes } from "../image-tools";
@@ -13,12 +23,16 @@ import {
   validateKnownModelSettings,
 } from "../models";
 import { packageRoot } from "../paths";
-import { loadRecipes, type Recipe, renderRecipe } from "./recipes";
+import { type ColorPalette, DEFAULT_PALETTE_ID, getColorPalette } from "./palettes";
+import { loadRecipes, type Recipe, recipeFamily, renderRecipe } from "./recipes";
 
 export const MAX_REFERENCE_COUNT = 14;
 export const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
 export const MAX_TOTAL_REFERENCE_BYTES = 100 * 1024 * 1024;
 export const MAX_SUBJECT_LENGTH = 12_000;
+export const MAX_DOWNLOAD_CANDIDATES = 24;
+// Applied separately to source and prepared asset payloads. ZIP framing and manifest.txt are excluded.
+export const MAX_DOWNLOAD_ASSET_BYTES = 256 * 1024 * 1024;
 
 export type CandidateStatus =
   | "queued"
@@ -43,6 +57,16 @@ export interface ImageRecord {
   bytes: number;
   width: number;
   height: number;
+  sha256: string;
+}
+
+export interface DownloadAsset {
+  candidateId: string;
+  recipeId: string;
+  recipeName: string;
+  variant: number;
+  name: string;
+  bytes: Uint8Array;
   sha256: string;
 }
 
@@ -118,6 +142,7 @@ export interface SessionManifest {
   status: SessionStatus;
   tool: { name: "nano-banana-workbench"; version: string; gitCommit?: string };
   subject: string;
+  palette?: ColorPalette;
   provider: "nano-banana";
   settings: {
     modelId: string;
@@ -152,6 +177,7 @@ export interface UploadedReference {
 export interface CreateSessionInput {
   subject: string;
   recipeIds: string[];
+  paletteId?: string;
   modelId: string;
   size: ImageSize;
   aspectRatio?: AspectRatio;
@@ -456,16 +482,26 @@ export class SessionStore {
       if (!recipe) throw new WorkbenchError("unknown_recipe", `Unknown recipe: ${id}`);
       return recipe;
     });
+    if (new Set(recipes.map(recipeFamily)).size !== 1) {
+      throw new WorkbenchError(
+        "mixed_recipe_families",
+        "Image and icon recipes cannot be combined in one run.",
+      );
+    }
+    const paletteId = input.paletteId ?? DEFAULT_PALETTE_ID;
+    const palette = getColorPalette(paletteId);
+    if (!palette)
+      throw new WorkbenchError("unknown_palette", `Unknown color palette: ${paletteId}`);
     if (recipes.length > 1 && recipes.some((recipe) => !recipe.comparable)) {
       throw new WorkbenchError(
         "incomparable_recipe",
         "Custom cannot be included in a style comparison.",
       );
     }
-    if (recipes.some((recipe) => recipe.kind === "project-icon") && input.aspectRatio !== "1:1") {
+    if (recipes.some((recipe) => recipeFamily(recipe) === "icon") && input.aspectRatio !== "1:1") {
       throw new WorkbenchError(
         "project_icon_requires_square",
-        "Folio project-icon recipes require a 1:1 aspect ratio.",
+        "Icon recipes require a 1:1 aspect ratio.",
       );
     }
     if (
@@ -591,7 +627,7 @@ export class SessionStore {
 
       const arms: ArmRecord[] = recipes.map((recipe, armIndex) => {
         const snapshot = structuredClone(recipe);
-        const renderedPrompt = renderRecipe(snapshot, subject);
+        const renderedPrompt = renderRecipe(snapshot, subject, palette);
         return {
           id: `arm-${armIndex + 1}`,
           recipe: snapshot,
@@ -618,6 +654,7 @@ export class SessionStore {
         status: "queued",
         tool: structuredClone(this.toolMetadata),
         subject,
+        palette: structuredClone(palette),
         provider: "nano-banana",
         settings: {
           modelId: input.modelId,
@@ -726,19 +763,20 @@ export class SessionStore {
     });
   }
 
-  async exportCandidate(sessionId: string, candidateId: string) {
-    const manifest = await this.readSession(sessionId);
+  private async verifiedCandidateSource(
+    sessionId: string,
+    manifest: SessionManifest,
+    candidateId: string,
+  ) {
     const { arm, candidate } = this.findCandidate(manifest, candidateId);
     if (candidate.status !== "succeeded") {
-      throw new WorkbenchError(
-        "candidate_not_ready",
-        "Only a succeeded candidate can be exported.",
-      );
+      throw new WorkbenchError("candidate_not_ready", "Only a succeeded candidate can be used.");
     }
     const source = candidate.images[0];
-    if (!source) throw new WorkbenchError("missing_image", "Candidate has no image to export.");
+    if (!source) throw new WorkbenchError("missing_image", "Candidate has no image.");
+    const sourcePath = this.pathInSession(sessionId, source.path);
     const sourceBytes = await this.readSessionFile(sessionId, source.path);
-    const sourceDimensions = await imageDimensions(this.pathInSession(sessionId, source.path));
+    const sourceDimensions = await imageDimensions(sourcePath);
     if (sha256(sourceBytes) !== source.sha256 || sourceBytes.length !== source.bytes) {
       throw new WorkbenchError(
         "source_changed",
@@ -754,10 +792,20 @@ export class SessionStore {
     if (arm.recipe.export.type === "folio-icon" && source.width !== source.height) {
       throw new WorkbenchError(
         "project_icon_requires_square",
-        "Project-icon export requires a square generated image.",
+        "Project-icon output requires a square generated image.",
         409,
       );
     }
+    return { arm, candidate, source, sourceBytes, sourcePath };
+  }
+
+  async exportCandidate(sessionId: string, candidateId: string) {
+    const manifest = await this.readSession(sessionId);
+    const { arm, source, sourceBytes } = await this.verifiedCandidateSource(
+      sessionId,
+      manifest,
+      candidateId,
+    );
     const references = await Promise.all(
       manifest.references.map(async (reference) => {
         const bytes = await this.readSessionFile(sessionId, reference.path);
@@ -881,6 +929,105 @@ export class SessionStore {
           () => undefined,
         );
       }
+    }
+  }
+
+  async prepareDownloadAssets(sessionId: string, candidateIds: string[]) {
+    if (!candidateIds.length || candidateIds.length > MAX_DOWNLOAD_CANDIDATES) {
+      throw new WorkbenchError(
+        "invalid_download_selection",
+        `Choose 1-${MAX_DOWNLOAD_CANDIDATES} candidates to download.`,
+      );
+    }
+    if (new Set(candidateIds).size !== candidateIds.length) {
+      throw new WorkbenchError("invalid_download_selection", "Download candidates must be unique.");
+    }
+
+    const manifest = await this.readSession(sessionId);
+    for (const candidateId of candidateIds) this.findCandidate(manifest, candidateId);
+    const selectedIds = new Set(candidateIds);
+    const orderedIds = this.orderedCandidates(manifest)
+      .filter((candidate) => selectedIds.has(candidate.id))
+      .map((candidate) => candidate.id);
+    let declaredBytes = 0;
+    for (const candidateId of orderedIds) {
+      const { candidate } = this.findCandidate(manifest, candidateId);
+      if (candidate.status !== "succeeded") {
+        throw new WorkbenchError("candidate_not_ready", "Only a succeeded candidate can be used.");
+      }
+      const source = candidate.images[0];
+      if (!source) throw new WorkbenchError("missing_image", "Candidate has no image.");
+      if (!Number.isSafeInteger(source.bytes) || source.bytes < 0) {
+        throw new WorkbenchError("source_changed", "Selected candidate size is invalid.");
+      }
+      declaredBytes += source.bytes;
+      if (declaredBytes > MAX_DOWNLOAD_ASSET_BYTES) {
+        throw new WorkbenchError(
+          "download_too_large",
+          `Selected source asset payload exceeds ${MAX_DOWNLOAD_ASSET_BYTES / 1024 / 1024} MiB.`,
+          413,
+        );
+      }
+    }
+
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "nano-banana-download-"));
+    const assets: DownloadAsset[] = [];
+    let actualBytes = 0;
+    let preparedBytes = 0;
+
+    try {
+      for (const [index, candidateId] of orderedIds.entries()) {
+        const { arm, candidate, source, sourceBytes, sourcePath } =
+          await this.verifiedCandidateSource(sessionId, manifest, candidateId);
+        actualBytes += sourceBytes.length;
+        if (actualBytes > MAX_DOWNLOAD_ASSET_BYTES) {
+          throw new WorkbenchError(
+            "download_too_large",
+            `Selected source asset payload exceeds ${MAX_DOWNLOAD_ASSET_BYTES / 1024 / 1024} MiB.`,
+            413,
+          );
+        }
+
+        const prefix = String(index + 1).padStart(2, "0");
+        const baseName = `${prefix}-${sanitizeName(String(arm.recipe.id))}-variant-${sanitizeName(String(candidate.variant))}`;
+        let name: string;
+        let bytes: Uint8Array;
+        if (arm.recipe.export.type === "folio-icon") {
+          name = `${baseName}.png`;
+          const outputPath = join(temporaryDirectory, `${prefix}.png`);
+          await exportCircularProjectIcon(sourcePath, outputPath);
+          const dimensions = await imageDimensions(outputPath);
+          if (dimensions.width !== 384 || dimensions.height !== 384) {
+            throw new Error("Downloaded icon has unexpected dimensions.");
+          }
+          bytes = await readFile(outputPath);
+        } else {
+          const extension = extensionForMime(source.mimeType);
+          name = `${baseName}${extension}`;
+          bytes = sourceBytes;
+        }
+        preparedBytes += bytes.length;
+        if (preparedBytes > MAX_DOWNLOAD_ASSET_BYTES) {
+          throw new WorkbenchError(
+            "download_too_large",
+            `Prepared asset payload exceeds ${MAX_DOWNLOAD_ASSET_BYTES / 1024 / 1024} MiB.`,
+            413,
+          );
+        }
+
+        assets.push({
+          candidateId,
+          recipeId: arm.recipe.id,
+          recipeName: arm.recipe.name,
+          variant: candidate.variant,
+          name,
+          bytes,
+          sha256: sha256(bytes),
+        });
+      }
+      return { manifest, assets };
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
     }
   }
 

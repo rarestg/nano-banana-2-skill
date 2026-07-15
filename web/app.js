@@ -1,5 +1,8 @@
 const state = {
   bootstrap: null,
+  recipeFamily: "icon",
+  recipeSelections: { image: [], icon: [] },
+  imageAspectRatio: "16:9",
   references: [],
   referencePreviewUrls: new Map(),
   currentSession: null,
@@ -40,6 +43,7 @@ const focusAttributes = [
   "data-clear-primary",
   "data-export",
   "data-export-selected",
+  "data-download-selected",
   "data-terminal-recovery",
 ];
 
@@ -77,12 +81,43 @@ function selectedRecipeIds() {
   return [...document.querySelectorAll('input[name="recipe"]:checked')].map((input) => input.value);
 }
 
+function familyForRecipe(recipe) {
+  return recipe.export.type === "folio-icon" ? "icon" : "image";
+}
+
+function selectedRecipes() {
+  const selected = new Set(selectedRecipeIds());
+  return state.bootstrap.recipes.filter((recipe) => selected.has(recipe.id));
+}
+
+function customRecipeOnly() {
+  const recipes = selectedRecipes();
+  return recipes.length === 1 && recipes[0].kind === "custom";
+}
+
+function selectedPaletteId() {
+  return (
+    document.querySelector('input[name="palette"]:checked')?.value ??
+    state.bootstrap?.defaults.paletteId
+  );
+}
+
 function showRecipeFeedback(message) {
   $("#recipe-feedback").textContent = message;
 }
 
+function renderOutputOptions() {
+  const input = document.querySelector(
+    `input[name="output-family"][value="${state.recipeFamily}"]`,
+  );
+  if (input) input.checked = true;
+}
+
 function renderRecipes() {
-  $("#recipe-options").innerHTML = state.bootstrap.recipes
+  const recipes = state.bootstrap.recipes.filter(
+    (recipe) => familyForRecipe(recipe) === state.recipeFamily,
+  );
+  $("#recipe-options").innerHTML = recipes
     .map(
       (recipe) => `<label class="recipe-option">
         <input type="checkbox" name="recipe" value="${recipe.id}">
@@ -90,26 +125,35 @@ function renderRecipes() {
       </label>`,
     )
     .join("");
-  for (const id of state.bootstrap.defaults.recipeIds) {
+  const defaults = state.recipeSelections[state.recipeFamily].length
+    ? state.recipeSelections[state.recipeFamily]
+    : state.bootstrap.defaults.recipeIdsByFamily[state.recipeFamily];
+  for (const id of defaults) {
     const input = document.querySelector(`input[name="recipe"][value="${id}"]`);
     if (input) input.checked = true;
   }
+  state.recipeSelections[state.recipeFamily] = selectedRecipeIds();
   for (const input of document.querySelectorAll('input[name="recipe"]')) {
     input.addEventListener("change", () => {
       showRecipeFeedback("");
-      if (input.value === "custom" && input.checked) {
-        const replaced = selectedRecipeIds().filter((id) => id !== "custom").length;
+      const recipe = state.bootstrap.recipes.find((item) => item.id === input.value);
+      if (!recipe) return;
+      if (!recipe.comparable && input.checked) {
+        const replaced = selectedRecipeIds().filter((id) => id !== recipe.id).length;
         for (const other of document.querySelectorAll('input[name="recipe"]')) {
           if (other !== input) other.checked = false;
         }
-        if (replaced) showRecipeFeedback("Custom replaces the selected Folio style recipes.");
+        if (replaced) showRecipeFeedback(`${recipe.name} replaces the selected style recipes.`);
       } else if (input.checked) {
-        const custom = document.querySelector('input[name="recipe"][value="custom"]');
-        if (custom?.checked) {
-          custom.checked = false;
+        const custom = selectedRecipes().find((item) => !item.comparable);
+        if (custom) {
+          const customInput = document.querySelector(
+            `input[name="recipe"][value="${CSS.escape(custom.id)}"]`,
+          );
+          if (customInput) customInput.checked = false;
           showRecipeFeedback("Custom was replaced so these styles can be compared.");
         }
-        if (selectedRecipeIds().filter((id) => id !== "custom").length > 3) {
+        if (selectedRecipeIds().length > 3) {
           input.checked = false;
           showRecipeFeedback("Choose up to three style recipes per run.");
         }
@@ -118,8 +162,78 @@ function renderRecipes() {
         input.checked = true;
         showRecipeFeedback("At least one style recipe is required.");
       }
+      state.recipeSelections[state.recipeFamily] = selectedRecipeIds();
+      updatePaletteAvailability();
+      updatePalettePreview();
       updateEstimate();
     });
+  }
+  updatePaletteAvailability();
+}
+
+function setRecipeFamily(family) {
+  if (!["image", "icon"].includes(family) || family === state.recipeFamily) return;
+  showRecipeFeedback("");
+  state.recipeSelections[state.recipeFamily] = selectedRecipeIds();
+  state.recipeFamily = family;
+  renderOutputOptions();
+  renderRecipes();
+  applyFamilyConstraints();
+  updatePalettePreview();
+  updateEstimate();
+}
+
+function renderPalettes() {
+  $("#palette-options").innerHTML = state.bootstrap.palettes
+    .map(
+      (palette) => `<label class="palette-option">
+        <input type="radio" name="palette" value="${escapeHtml(palette.id)}">
+        <span class="palette-card">
+          <svg class="palette-swatch" viewBox="0 0 ${palette.colors.length} 1" preserveAspectRatio="none" focusable="false" aria-hidden="true">${palette.colors.map((color, index) => `<rect x="${index}" y="0" width="1" height="1" fill="${escapeHtml(color)}"></rect>`).join("")}</svg>
+          <strong>${escapeHtml(palette.name)}</strong>
+          <small>${palette.colors.length} colors</small>
+          <span class="palette-state" aria-hidden="true"><span class="checked">✓ Selected</span><span class="unchecked">Select</span><span class="unavailable">Not used</span></span>
+        </span>
+      </label>`,
+    )
+    .join("");
+  const defaultPalette = document.querySelector(
+    `input[name="palette"][value="${CSS.escape(state.bootstrap.defaults.paletteId)}"]`,
+  );
+  if (defaultPalette) defaultPalette.checked = true;
+  updatePalettePreview();
+}
+
+function updatePalettePreview() {
+  if (!state.bootstrap) return;
+  const palette = state.bootstrap.palettes.find((item) => item.id === selectedPaletteId());
+  if (!palette) return;
+  $("#palette-preview").innerHTML = palette.colors
+    .map(
+      (color) =>
+        `<li class="color-chip"><span class="color-swatch" style="background-color: ${escapeHtml(color)}" aria-hidden="true"></span><span class="color-value">${escapeHtml(color)}</span></li>`,
+    )
+    .join("");
+  const unused = customRecipeOnly();
+  $("#palette-status").textContent = unused ? "Palette not used." : "";
+  $("#palette-description-copy").textContent = unused
+    ? " Custom uses the subject as its complete prompt, so no palette is inserted."
+    : palette.description;
+}
+
+function updatePaletteAvailability() {
+  $("#palette-picker").disabled = customRecipeOnly();
+}
+
+function applyFamilyConstraints() {
+  const aspect = $("#aspect");
+  if (!aspect.options.length) return;
+  const icon = state.recipeFamily === "icon";
+  aspect.disabled = icon;
+  if (icon) {
+    aspect.value = "1:1";
+  } else if ([...aspect.options].some((option) => option.value === state.imageAspectRatio)) {
+    aspect.value = state.imageAspectRatio;
   }
 }
 
@@ -143,6 +257,7 @@ function updateModelSettings() {
     : state.bootstrap.defaults.aspectRatio;
   $("#google-search").disabled = !model.searchGrounding;
   if (!model.searchGrounding) $("#google-search").checked = false;
+  applyFamilyConstraints();
   updateEstimate();
 }
 
@@ -356,7 +471,7 @@ function renderCandidate(session, arm, candidate) {
   const terminalLabel = terminalCandidateLabel(candidate.status);
   return `<article class="candidate${focused ? " focused" : ""}${primary ? " primary-candidate" : ""}" data-candidate="${candidate.id}" aria-label="${escapeHtml(identity)}">
     <div class="candidate-flags">
-      <label class="export-check"><input type="checkbox" data-export-select="${candidate.id}" aria-label="Select ${escapeHtml(identity)} for bulk export" ${selectedForExport ? "checked" : ""} ${candidateExportReady(arm, candidate) ? "" : "disabled"}><span aria-hidden="true">Export</span></label>
+      <label class="export-check"><input type="checkbox" data-export-select="${candidate.id}" aria-label="Select ${escapeHtml(identity)} for download or export" ${selectedForExport ? "checked" : ""} ${candidateExportReady(arm, candidate) ? "" : "disabled"}><span aria-hidden="true">Select</span></label>
       <span class="candidate-flag-list">${primary ? '<strong class="flag flag-primary">Primary</strong>' : ""}${exported ? '<strong class="flag flag-exported">Exported</strong>' : ""}</span>
     </div>
     <button class="candidate-focus" type="button" data-focus-candidate="${candidate.id}" aria-pressed="${focused}" aria-label="Inspect ${escapeHtml(identity)}">
@@ -492,7 +607,7 @@ function renderInspector(session) {
       showTerminalRecovery
         ? ""
         : `<div class="inspector-section"><h3>Primary</h3><p>${primary ? "This is the Primary candidate for the run." : "Primary is optional and does not control exports."}</p>${primary ? '<button type="button" data-clear-primary>Clear Primary</button>' : `<button type="button" data-primary="${candidate.id}" ${ready ? "" : "disabled"}>Set as Primary</button>`}</div>
-    <div class="inspector-section"><h3>Export</h3><p>${exportedCount ? `Exported ${exportedCount} time${exportedCount === 1 ? "" : "s"}.` : "Export this candidate without changing Primary or the export checklist."}</p><button class="primary" type="button" data-export="${candidate.id}" ${exportReady ? (state.exporting ? 'aria-disabled="true"' : "") : "disabled"}>Export candidate</button></div>`
+    <div class="inspector-section"><h3>Export</h3><p>${exportedCount ? `Exported ${exportedCount} time${exportedCount === 1 ? "" : "s"}.` : "Export this candidate without changing Primary or the export checklist."}</p><button class="primary" type="button" data-export="${candidate.id}" ${exportReady ? (state.exporting ? 'aria-disabled="true"' : "") : "disabled"}>Export candidate to disk</button></div>`
     }
   </div>`;
   restoreFocus(container, focusedControl);
@@ -539,8 +654,11 @@ function schedulePoll(sessionId) {
 function updateRunSummary(session) {
   $("#summary-recipes").textContent = session.arms.map((arm) => arm.recipe.name).join(" + ");
   $("#summary-subject").textContent = session.subject;
+  const palette = session.arms.some((arm) => arm.recipe.kind !== "custom")
+    ? `<div><dt>Palette</dt><dd>${escapeHtml(session.palette?.name || "Folio teal")}</dd></div>`
+    : "";
   $("#summary-settings").innerHTML =
-    `<div><dt>Model</dt><dd>${escapeHtml(modelShortLabel(session.settings.modelId))}</dd></div><div><dt>Resolution</dt><dd>${escapeHtml(formatSize(session.settings.size))}</dd></div><div><dt>Aspect</dt><dd>${escapeHtml(session.settings.aspectRatio || "default")}</dd></div><div><dt>Variants</dt><dd>${session.settings.variantsPerRecipe} per style</dd></div>`;
+    `${palette}<div><dt>Model</dt><dd>${escapeHtml(modelShortLabel(session.settings.modelId))}</dd></div><div><dt>Resolution</dt><dd>${escapeHtml(formatSize(session.settings.size))}</dd></div><div><dt>Aspect</dt><dd>${escapeHtml(session.settings.aspectRatio || "default")}</dd></div><div><dt>Variants</dt><dd>${session.settings.variantsPerRecipe} per style</dd></div>`;
 }
 
 function setEditorCollapsed(collapsed) {
@@ -571,9 +689,27 @@ function renderExportTray() {
   const count = state.exportSelectedIds.size;
   tray.hidden = count === 0;
   tray.innerHTML = count
-    ? `<button class="primary" type="button" data-export-selected ${state.exporting ? 'aria-disabled="true"' : ""}>${state.exporting ? "Exporting…" : `Export selected (${count})`}</button>`
+    ? `<button class="primary" type="button" data-download-selected>Download ZIP (${count})</button><button type="button" data-export-selected ${state.exporting ? 'aria-disabled="true"' : ""}>${state.exporting ? "Exporting…" : `Export to disk (${count})`}</button>`
     : "";
   restoreFocus(tray, focusedControl);
+}
+
+function downloadSelected() {
+  const sessionId = state.currentSession?.id;
+  if (!sessionId || !state.exportSelectedIds.size) return;
+  const parameters = new URLSearchParams();
+  for (const candidateId of state.exportSelectedIds) {
+    parameters.append("candidateId", candidateId);
+  }
+  const link = document.createElement("a");
+  link.href = `/api/sessions/${encodeURIComponent(sessionId)}/download?${parameters}`;
+  link.download = `nano-banana-${sessionId}.zip`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  showSessionMessage(
+    `Browser download started for ${state.exportSelectedIds.size} selected candidate${state.exportSelectedIds.size === 1 ? "" : "s"}.`,
+  );
 }
 
 const graphemeSegmenter =
@@ -877,7 +1013,7 @@ async function loadHistory() {
     ? result.sessions
         .map(
           (session) =>
-            `<button class="history-item" type="button" data-session="${session.id}" ${session.id === state.currentSession?.id ? 'aria-current="true"' : ""}><strong>${escapeHtml(session.recipes.join(" + "))}</strong><span>${escapeHtml(session.subject)}</span><small>${escapeHtml(statusLabel(session.status))} · ${new Date(session.createdAt).toLocaleString()}</small></button>`,
+            `<button class="history-item" type="button" data-session="${session.id}" ${session.id === state.currentSession?.id ? 'aria-current="true"' : ""}><div class="history-recipe-line"><strong>${escapeHtml(session.recipes.join(" + "))}</strong><span class="history-style-count" aria-label="${session.recipes.length} style${session.recipes.length === 1 ? "" : "s"} generated">${session.recipes.length}</span></div><span>${escapeHtml(session.subject)}</span><small>${escapeHtml(statusLabel(session.status))} · ${new Date(session.createdAt).toLocaleString()}</small></button>`,
         )
         .join("")
     : '<p class="hint">No workbench sessions yet.</p>';
@@ -1029,13 +1165,23 @@ function loadSessionIntoForm(session) {
   $("#derived-label").textContent = `Based on current session`;
   $("#subject").value = session.subject;
   updateSubjectCount();
-  for (const input of document.querySelectorAll('input[name="recipe"]')) {
-    input.checked = session.arms.some((arm) => arm.recipe.id === input.value);
+  state.recipeFamily = familyForRecipe(session.arms[0].recipe);
+  state.recipeSelections[state.recipeFamily] = session.arms.map((arm) => arm.recipe.id);
+  if (state.recipeFamily === "image") {
+    state.imageAspectRatio = session.settings.aspectRatio || "16:9";
   }
+  renderOutputOptions();
+  renderRecipes();
+  const palette = document.querySelector(
+    `input[name="palette"][value="${CSS.escape(session.palette?.id || state.bootstrap.defaults.paletteId)}"]`,
+  );
+  if (palette) palette.checked = true;
+  updatePalettePreview();
   $("#model").value = session.settings.modelId;
   updateModelSettings();
   $("#size").value = session.settings.size;
-  $("#aspect").value = session.settings.aspectRatio || "1:1";
+  $("#aspect").value = state.recipeFamily === "icon" ? "1:1" : state.imageAspectRatio;
+  applyFamilyConstraints();
   $("#variants").value = session.settings.variantsPerRecipe;
   $("#google-search").checked = session.settings.googleSearch;
   clearReferences();
@@ -1059,6 +1205,7 @@ async function submitGeneration(event) {
   const payload = {
     subject: $("#subject").value,
     recipeIds,
+    paletteId: selectedPaletteId(),
     modelId: $("#model").value,
     size: $("#size").value,
     aspectRatio: $("#aspect").value,
@@ -1285,14 +1432,20 @@ async function initialize() {
       "Generation disabled. Add GEMINI_API_KEY=your_key to ~/.nano-banana/.env, then restart the workbench.";
   }
   $("#subject").maxLength = state.bootstrap.limits.maxSubjectLength;
+  state.recipeFamily = state.bootstrap.defaults.recipeFamily;
+  state.recipeSelections = {
+    image: [...state.bootstrap.defaults.recipeIdsByFamily.image],
+    icon: [...state.bootstrap.defaults.recipeIdsByFamily.icon],
+  };
+  renderOutputOptions();
   renderRecipes();
+  renderPalettes();
   $("#model").innerHTML = state.bootstrap.models
     .map((model) => `<option value="${model.id}">${model.label}</option>`)
     .join("");
   $("#model").value = state.bootstrap.defaults.modelId;
   updateModelSettings();
   $("#size").value = state.bootstrap.defaults.size;
-  $("#aspect").value = state.bootstrap.defaults.aspectRatio;
   $("#variants").value = state.bootstrap.defaults.variantsPerRecipe;
   updateSubjectCount();
   updateEstimate();
@@ -1300,10 +1453,17 @@ async function initialize() {
 }
 
 $("#generation-form").addEventListener("submit", submitGeneration);
+$("#output-options").addEventListener("change", (event) => {
+  if (event.target.name === "output-family") setRecipeFamily(event.target.value);
+});
 $("#model").addEventListener("change", updateModelSettings);
 $("#size").addEventListener("change", updateEstimate);
+$("#aspect").addEventListener("change", () => {
+  if (state.recipeFamily === "image") state.imageAspectRatio = $("#aspect").value;
+});
 $("#variants").addEventListener("input", updateEstimate);
 $("#subject").addEventListener("input", updateSubjectCount);
+$("#palette-options").addEventListener("change", updatePalettePreview);
 $("#references").addEventListener("change", (event) => {
   state.inheritReferences = false;
   state.references.push(...event.target.files);
@@ -1368,9 +1528,9 @@ $("#candidate-inspector").addEventListener("click", (event) => {
   }
 });
 $("#export-tray").addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("[data-export-selected]")) {
-    void exportSelected();
-  }
+  if (!(event.target instanceof Element)) return;
+  if (event.target.closest("[data-download-selected]")) downloadSelected();
+  if (event.target.closest("[data-export-selected]")) void exportSelected();
 });
 $("#regenerate").addEventListener("click", () => {
   if (state.currentSession) loadSessionIntoForm(state.currentSession);

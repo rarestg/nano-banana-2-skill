@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "folio-geometric-isometric",
-  "version": 1,
+  "version": 2,
   "name": "Folio geometric isometric",
   "description": "The production Folio project-icon direction: flat, geometric, isometric, spare, and circle-safe.",
   "kind": "project-icon",
   "comparable": true,
-  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nStyle contract:\nFlat geometric isometric tile icon, not a scene. Strict simple isometric geometry: one dominant silhouette and at most two small supporting forms. Use only this Folio palette target: #FAFAFA, #E4E4E7, #71717B, #18181B, #CBFBF1, #00BBA7. One thin zinc outline is allowed only where a complex form needs it. No texture, halftone, distressed or grungy treatment, lighting, cast shadows, gradients, gloss, bevels, photorealism, pseudo-text, labels, letters, logos, or warm, blue, or purple accent colors. Solid #FAFAFA background intended as a circular field. Keep every critical part within the central 70 percent of the canvas, circle-safe with a 15 percent margin. It must remain legible at 80, 96, and 112 pixels.",
+  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nColor palette:\nUse only this selected palette target: {{colorPalette}}. Use its first color as the solid background.\n\nStyle contract:\nFlat geometric isometric tile icon, not a scene. Strict simple isometric geometry: one dominant silhouette and at most two small supporting forms. One thin dark outline is allowed only where a complex form needs it. No texture, halftone, distressed or grungy treatment, lighting, cast shadows, gradients, gloss, bevels, photorealism, pseudo-text, labels, letters, logos, or colors outside the selected palette. The solid background is intended as a circular field. Keep every critical part within the central 70 percent of the canvas, circle-safe with a 15 percent margin. It must remain legible at 80, 96, and 112 pixels.",
   "preview": {
     "type": "folio-icon",
     "sizes": [80, 96, 112],

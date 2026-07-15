@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "folio-flat-cut-paper",
-  "version": 1,
+  "version": 2,
   "name": "Folio flat cut-paper",
-  "description": "A crisp layered-paper interpretation using the same Folio palette and small-size discipline.",
+  "description": "A crisp layered-paper interpretation using the selected palette and small-size discipline.",
   "kind": "project-icon",
   "comparable": true,
-  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nStyle contract:\nFlat cut-paper icon, not a scene. Build one dominant silhouette and at most two supporting forms from a few large, clean, overlapping cardstock shapes. Use shallow layering and crisp cut edges to separate forms, without realistic paper fibers, torn edges, lighting, or cast shadows. Use only this Folio palette target: #FAFAFA, #E4E4E7, #71717B, #18181B, #CBFBF1, #00BBA7. No gradients, gloss, bevels, photorealism, pseudo-text, labels, letters, logos, busy decoration, or warm, blue, or purple accent colors. Solid #FAFAFA background intended as a circular field. Keep every critical part within the central 70 percent of the canvas, circle-safe with a 15 percent margin. It must remain legible at 80, 96, and 112 pixels.",
+  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nColor palette:\nUse only this selected palette target: {{colorPalette}}. Use its first color as the solid background.\n\nStyle contract:\nFlat cut-paper icon, not a scene. Build one dominant silhouette and at most two supporting forms from a few large, clean, overlapping cardstock shapes. Use shallow layering and crisp cut edges to separate forms, without realistic paper fibers, torn edges, lighting, or cast shadows. No gradients, gloss, bevels, photorealism, pseudo-text, labels, letters, logos, busy decoration, or colors outside the selected palette. The solid background is intended as a circular field. Keep every critical part within the central 70 percent of the canvas, circle-safe with a 15 percent margin. It must remain legible at 80, 96, and 112 pixels.",
   "preview": {
     "type": "folio-icon",
     "sizes": [80, 96, 112],

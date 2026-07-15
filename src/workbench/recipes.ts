@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { packageRoot } from "../paths";
+import { type ColorPalette, palettePrompt } from "./palettes";
 
 export interface Recipe {
   schemaVersion: 1;
@@ -9,7 +10,7 @@ export interface Recipe {
   version: number;
   name: string;
   description: string;
-  kind: "project-icon" | "custom";
+  kind: "project-icon" | "artwork" | "custom";
   comparable: boolean;
   promptTemplate: string;
   preview:
@@ -27,6 +28,10 @@ export interface Recipe {
         transparentOutsideCircle: true;
       }
     | { type: "raw-only" };
+}
+
+export function recipeFamily(recipe: Recipe): "image" | "icon" {
+  return recipe.export.type === "folio-icon" ? "icon" : "image";
 }
 
 const defaultRecipeDirectory = join(packageRoot(), "recipes");
@@ -56,7 +61,7 @@ function assertRecipe(value: unknown, path: string): asserts value is Recipe {
     (recipe.version as number) < 1 ||
     typeof recipe.name !== "string" ||
     typeof recipe.description !== "string" ||
-    !["project-icon", "custom"].includes(String(recipe.kind)) ||
+    !["project-icon", "artwork", "custom"].includes(String(recipe.kind)) ||
     typeof recipe.comparable !== "boolean" ||
     typeof recipe.promptTemplate !== "string" ||
     !recipe.promptTemplate.includes("{{subject}}") ||
@@ -119,16 +124,25 @@ function assertRecipe(value: unknown, path: string): asserts value is Recipe {
   if (
     (recipe.kind === "project-icon" &&
       (preview.type !== "folio-icon" || exportSettings.type !== "folio-icon")) ||
+    (recipe.kind === "artwork" &&
+      (preview.type !== "generic" || exportSettings.type !== "raw-only")) ||
     (recipe.kind === "custom" &&
-      (recipe.comparable || preview.type !== "generic" || exportSettings.type !== "raw-only"))
+      (recipe.comparable ||
+        !(
+          (preview.type === "generic" && exportSettings.type === "raw-only") ||
+          (preview.type === "folio-icon" && exportSettings.type === "folio-icon")
+        )))
   ) {
     throw new Error(`Recipe kind does not match preview/export behavior: ${path}`);
   }
-  const unknownVariables = [...recipe.promptTemplate.matchAll(/{{\s*([^}]+)\s*}}/g)].map((match) =>
-    match[1].trim(),
+  const promptVariables = [...recipe.promptTemplate.matchAll(/{{[^{}]*}}/g)].map(
+    (match) => match[0],
   );
-  if (unknownVariables.some((variable) => variable !== "subject")) {
+  if (promptVariables.some((variable) => !["{{subject}}", "{{colorPalette}}"].includes(variable))) {
     throw new Error(`Recipe ${recipe.id} uses an unknown prompt variable.`);
+  }
+  if (recipe.kind !== "custom" && !promptVariables.includes("{{colorPalette}}")) {
+    throw new Error(`Recipe ${recipe.id} must use the colorPalette prompt variable.`);
   }
 }
 
@@ -146,6 +160,8 @@ export async function loadRecipes(directory = defaultRecipeDirectory) {
   return recipes;
 }
 
-export function renderRecipe(recipe: Recipe, subject: string) {
-  return recipe.promptTemplate.replaceAll("{{subject}}", subject.trim());
+export function renderRecipe(recipe: Recipe, subject: string, palette: ColorPalette) {
+  return recipe.promptTemplate.replace(/{{subject}}|{{colorPalette}}/g, (variable) =>
+    variable === "{{subject}}" ? subject.trim() : palettePrompt(palette),
+  );
 }

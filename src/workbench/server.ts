@@ -7,6 +7,7 @@ import { detectImageMimeType } from "../image-tools";
 import { type AspectRatio, type ImageSize, VALID_ASPECTS, VALID_SIZES } from "../models";
 import { packageRoot } from "../paths";
 import { type GenerationRunner, JobQueue, mockGenerationRunner } from "./jobs";
+import { COLOR_PALETTES, DEFAULT_PALETTE_ID } from "./palettes";
 import {
   type CreateSessionInput,
   MAX_REFERENCE_BYTES,
@@ -17,6 +18,7 @@ import {
   type UploadedReference,
   WorkbenchError,
 } from "./store";
+import { createStoredZip } from "./zip";
 
 const webRoot = join(packageRoot(), "web");
 const MAX_REQUEST_BYTES = MAX_TOTAL_REFERENCE_BYTES + 1024 * 1024;
@@ -150,6 +152,7 @@ export function parseCreateSessionPayload(value: unknown): Omit<CreateSessionInp
     [
       "subject",
       "recipeIds",
+      "paletteId",
       "modelId",
       "size",
       "aspectRatio",
@@ -182,6 +185,7 @@ export function parseCreateSessionPayload(value: unknown): Omit<CreateSessionInp
   return {
     subject: requiredString(value.subject, "subject"),
     recipeIds: value.recipeIds,
+    paletteId: optionalString(value.paletteId, "paletteId"),
     modelId: requiredString(value.modelId, "modelId"),
     size: value.size as ImageSize,
     aspectRatio: value.aspectRatio as AspectRatio | undefined,
@@ -344,9 +348,16 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
             mock,
             storageDisplayRoot: storageDisplayRoot(store.root),
             recipes: store.getRecipes(),
+            palettes: COLOR_PALETTES,
             models: store.capabilities(),
             defaults: {
+              recipeFamily: "icon",
               recipeIds: ["folio-geometric-isometric"],
+              recipeIdsByFamily: {
+                icon: ["folio-geometric-isometric"],
+                image: ["airy-pastel-modernist"],
+              },
+              paletteId: DEFAULT_PALETTE_ID,
               modelId: "gemini-3.1-flash-image",
               size: "512",
               aspectRatio: "1:1",
@@ -387,6 +398,48 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
         const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
         if (request.method === "GET" && sessionMatch) {
           return json({ session: await store.readSession(sessionMatch[1]) });
+        }
+
+        const downloadMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/download$/);
+        if (request.method === "GET" && downloadMatch) {
+          const unknownFields = [...new Set(url.searchParams.keys())].filter(
+            (key) => key !== "candidateId",
+          );
+          if (unknownFields.length) {
+            throw new WorkbenchError(
+              "unknown_field",
+              `Download query contains unknown field: ${unknownFields[0]}`,
+            );
+          }
+          const { manifest, assets } = await store.prepareDownloadAssets(
+            downloadMatch[1],
+            url.searchParams.getAll("candidateId"),
+          );
+          const manifestText = [
+            `Nano Banana download: ${manifest.id}`,
+            "",
+            ...assets.map(
+              (asset) =>
+                `${asset.name}\t${asset.recipeName}\tvariant ${asset.variant}\tsha256 ${asset.sha256}`,
+            ),
+            "",
+          ].join("\n");
+          const archive = createStoredZip([
+            ...assets.map((asset) => ({ name: asset.name, bytes: asset.bytes })),
+            { name: "manifest.txt", bytes: new TextEncoder().encode(manifestText) },
+          ]);
+          const filename = `nano-banana-${manifest.id}.zip`;
+          return new Response(archive, {
+            headers: {
+              "Content-Type": "application/zip",
+              "Content-Disposition": `attachment; filename="${filename}"`,
+              "Content-Length": String(archive.length),
+              "Cache-Control": "private, no-store",
+              "Content-Security-Policy": "default-src 'none'; sandbox",
+              "Cross-Origin-Resource-Policy": "same-origin",
+              "X-Content-Type-Options": "nosniff",
+            },
+          });
         }
 
         if (request.method === "POST" && url.pathname === "/api/sessions") {

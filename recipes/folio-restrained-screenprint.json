@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "folio-restrained-screenprint",
-  "version": 1,
+  "version": 2,
   "name": "Folio restrained screenprint",
   "description": "A bold, limited-ink direction with controlled registration and no distressed poster effects.",
   "kind": "project-icon",
   "comparable": true,
-  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nStyle contract:\nRestrained screenprint icon, not a poster or scene. Use one dominant bold silhouette and at most two supporting forms, constructed from large flat spot-color shapes. Use only this Folio palette target: #FAFAFA, #E4E4E7, #71717B, #18181B, #CBFBF1, #00BBA7, with no more than four inks visible in the icon. Crisp deliberate registration is preferred; one very sparse regular dot screen may appear inside one subordinate form only. No distressed texture, paper grain, noise, gradients, lighting, cast shadows, gloss, bevels, photorealism, pseudo-text, labels, letters, logos, or warm, blue, or purple accent colors. Solid #FAFAFA background intended as a circular field. Keep every critical part within the central 70 percent of the canvas, circle-safe with a 15 percent margin. It must remain legible at 80, 96, and 112 pixels.",
+  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nColor palette:\nUse only this selected palette target: {{colorPalette}}, with no more than four colors visible in the icon. Use the first color as the solid background.\n\nStyle contract:\nRestrained screenprint icon, not a poster or scene. Use one dominant bold silhouette and at most two supporting forms, constructed from large flat spot-color shapes. Crisp deliberate registration is preferred; one very sparse regular dot screen may appear inside one subordinate form only. No distressed texture, paper grain, noise, gradients, lighting, cast shadows, gloss, bevels, photorealism, pseudo-text, labels, letters, logos, or colors outside the selected palette. The solid background is intended as a circular field. Keep every critical part within the central 70 percent of the canvas, circle-safe with a 15 percent margin. It must remain legible at 80, 96, and 112 pixels.",
   "preview": {
     "type": "folio-icon",
     "sizes": [80, 96, 112],

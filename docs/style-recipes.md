@@ -17,8 +17,10 @@ Keep these concerns separate:
   palette, density, background, forbidden treatments, safe area, and review
   sizes.
 
-The `{{subject}}` variable is replaced verbatim. The Workbench stores the recipe
-snapshot, rendered prompt, and SHA-256 of each in the session manifest. It does
+The `{{subject}}` variable is replaced verbatim. Non-Custom recipes also use
+`{{colorPalette}}`, which is replaced by the ordered hex colors from the selected
+curated palette. The Workbench stores the recipe and palette snapshots, rendered
+prompt, and SHA-256 of each recipe and prompt in the session manifest. It does
 not silently rewrite or improve the brief.
 
 ## Folio production language
@@ -28,13 +30,13 @@ project-icon family. Its contract is intentionally strict:
 
 - Flat geometric isometric tile icon, not a scene.
 - One dominant silhouette and at most two small supporting forms.
-- Palette limited to `#FAFAFA`, `#E4E4E7`, `#71717B`, `#18181B`, `#CBFBF1`,
-  and `#00BBA7`.
+- Palette limited to the selected 4-12 color preset; its first color is the
+  background.
 - At most one thin zinc outline where a complex form needs separation.
 - No texture, halftone, distressed treatment, lighting, cast shadows,
   gradients, gloss, bevels, photorealism, pseudo-text, labels, letters, logos,
-  or warm, blue, or purple accents.
-- Solid `#FAFAFA` circular field, critical content inside the central 70%, and
+  or colors outside the selected palette.
+- Solid first-color circular field, critical content inside the central 70%, and
   approximately 15% circle-safe margin.
 - Legibility at native 80, 96, and 112 pixels on Folio light and dark fields.
 
@@ -53,8 +55,9 @@ Comparison is a controlled style test. The Workbench locks:
 - Queue concurrency.
 
 Calls are scheduled round-robin by variant, then recipe. Every result and
-failure remains in the manifest. Do not selectively reroll one arm and present
-it as the original comparison.
+failure remains in the manifest. Image and icon recipes cannot be mixed in one
+run. Do not selectively reroll one arm and present it as the original
+comparison.
 
 Use identical references for every arm. If references themselves encode a style
 and differ between arms, that is a complete-preset comparison, not a text-only
@@ -65,7 +68,9 @@ style comparison; record that judgment in the subject or downstream review.
 Recipe JSON is strict. Unknown fields and mismatched discriminants are rejected.
 `preview.type: "folio-icon"` requires integer native sizes plus light and dark
 backgrounds. `export.type: "folio-icon"` requires the fixed 384×384 circular
-RGBA contract. Custom recipes require generic preview and raw-only export.
+RGBA contract. Artwork recipes require generic preview and raw-only export.
+Custom recipes are non-comparable complete prompts and may use either the
+generic/raw image contract or the Folio circular-icon contract.
 
 Minimal custom-style recipe:
 
@@ -78,7 +83,7 @@ Minimal custom-style recipe:
   "description": "Short reviewer-facing description.",
   "kind": "project-icon",
   "comparable": true,
-  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nStyle contract:\n...",
+  "promptTemplate": "Create one portfolio project icon.\n\nSubject brief:\n{{subject}}\n\nColor palette:\n{{colorPalette}}\n\nStyle contract:\n...",
   "preview": {
     "type": "folio-icon",
     "sizes": [80, 96, 112],
@@ -98,12 +103,13 @@ To author another recipe manually:
 1. Copy the closest JSON file in `recipes/`.
 2. Give it a unique lowercase kebab-case `id` and increment its own `version`
    whenever the prompt contract changes.
-3. Keep exactly one supported template variable: `{{subject}}`.
+3. Use `{{subject}}` and, for every non-Custom recipe, `{{colorPalette}}`.
 4. Choose `kind: "project-icon"` only when Folio native previews and circular
-   384px export are correct. Otherwise use the Custom recipe instead of
-   inventing an export transform.
+   384px export are correct. Use `kind: "artwork"` with generic preview and raw
+   export for a reusable full-frame style. `kind: "custom"` is reserved for
+   complete-prompt image or icon recipes and must remain non-comparable.
 5. Set `comparable: true` only when it is meaningful to compare the recipe with
-   the other Folio icon styles under locked inputs.
+   other styles under locked inputs.
 6. Restart the Workbench; recipes are validated at startup.
 
 Do not put a provider model, resolution alias, key, price, or filesystem path in
