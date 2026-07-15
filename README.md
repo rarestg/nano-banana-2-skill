@@ -58,6 +58,7 @@ Built-in recipes:
 - Tenebrist oil realism: dark, theatrical volume shaped by concentrated light.
 - Hard-edge geometric screenprint: exact flat shapes and modernist graphic structure.
 - Ornamental miniature maximalism: disciplined intricacy, pattern, and jewel-like color.
+- Refined pixel art: crisp silhouettes, deliberate pixel clusters, and restrained shading.
 - Custom image: the subject field is the complete prompt with raw output.
 - Custom icon: the subject field is the complete prompt with circular icon export.
 

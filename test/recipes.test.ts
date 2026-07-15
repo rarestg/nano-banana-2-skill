@@ -12,7 +12,7 @@ import {
 } from "../src/workbench/recipes";
 
 describe("provider-neutral recipes", () => {
-  test("ships nine built-in image and icon recipes", async () => {
+  test("ships ten built-in image and icon recipes", async () => {
     const recipes = await loadRecipes();
     expect(recipes.map((recipe) => recipe.id)).toEqual([
       "airy-pastel-modernist",
@@ -23,9 +23,10 @@ describe("provider-neutral recipes", () => {
       "folio-restrained-screenprint",
       "hard-edge-geometric-screenprint",
       "ornamental-miniature-maximalism",
+      "refined-pixel-art",
       "tenebrist-oil-realism",
     ]);
-    expect(recipes.filter((recipe) => recipe.comparable)).toHaveLength(7);
+    expect(recipes.filter((recipe) => recipe.comparable)).toHaveLength(8);
     expect(recipes.filter((recipe) => recipe.kind === "custom")).toHaveLength(2);
     expect(
       recipes.filter((recipe) => recipe.kind === "custom").every((recipe) => !recipe.comparable),
@@ -39,6 +40,7 @@ describe("provider-neutral recipes", () => {
       "folio-restrained-screenprint": "icon",
       "hard-edge-geometric-screenprint": "image",
       "ornamental-miniature-maximalism": "image",
+      "refined-pixel-art": "image",
       "tenebrist-oil-realism": "image",
     });
   });

@@ -37,7 +37,7 @@ export function recipeFamily(recipe: Recipe): "image" | "icon" {
 const defaultRecipeDirectory = join(packageRoot(), "recipes");
 
 export const FULL_FRAME_ARTWORK_MODIFIER =
-  "Render only the finished artwork itself as a clean, full-frame image. Do not show a physical canvas, manuscript, page, book, print, poster, frame, wall, studio, photograph, or presentation mockup. Show no physical page edges, borders, cast shadows, or surrounding presentation context. Any ornamental border must be an intentional element inside the artwork itself, not the visible edge of a physical sheet.";
+  "Render only the finished artwork itself as a clean, full-frame image. Do not show a physical canvas, manuscript, page, book, print, poster, frame, wall, studio, screen, monitor, photograph, or presentation mockup. Show no physical page edges, borders, cast shadows, or surrounding presentation context. Any ornamental border must be an intentional element inside the artwork itself, not the visible edge of a physical sheet.";
 
 function assertRecipe(value: unknown, path: string): asserts value is Recipe {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

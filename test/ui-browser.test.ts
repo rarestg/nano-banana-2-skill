@@ -178,11 +178,12 @@ describe("workbench browser contract", () => {
       "airy-pastel-modernist",
       "hard-edge-geometric-screenprint",
       "ornamental-miniature-maximalism",
+      "refined-pixel-art",
       "tenebrist-oil-realism",
       "custom",
     ]);
     for (const [width, columns] of [
-      [1440, 5],
+      [1440, 6],
       [1100, 3],
       [760, 3],
       [390, 1],
@@ -253,7 +254,7 @@ describe("workbench browser contract", () => {
       0,
     );
     await page.locator('input[name="output-family"][value="image"]').check();
-    expect(await page.locator('input[name="recipe"]').count()).toBe(5);
+    expect(await page.locator('input[name="recipe"]').count()).toBe(6);
     expect(
       await page.locator('input[name="recipe"][value="airy-pastel-modernist"]').isChecked(),
     ).toBe(true);
