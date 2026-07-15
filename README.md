@@ -26,6 +26,11 @@ Get a key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ## Workbench
 
+The Workbench is a desktop-only interface. Narrow and mobile viewports are not
+supported product targets; do not spend implementation or test effort on
+responsive features or adaptations for them. Existing narrow-layout behavior is
+best-effort fallback only.
+
 Start the loopback-only server:
 
 ```bash

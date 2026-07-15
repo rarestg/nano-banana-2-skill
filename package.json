@@ -10,13 +10,15 @@
     "start": "bun run src/cli.ts",
     "dev": "bun run src/cli.ts",
     "workbench": "bun run src/cli.ts workbench",
-    "test": "bun test",
+    "test": "bun run test:ui && bun run test:unit",
+    "test:unit": "bun test --no-orphans --path-ignore-patterns='**/ui-browser.test.ts'",
+    "test:ui": "bun test --no-orphans test/ui-browser.test.ts",
     "typecheck": "tsc --noEmit",
     "format:check": "biome format .",
     "lint": "biome lint .",
     "build": "rm -rf dist && bun build src/cli.ts --target=bun --outdir=dist && cp -R web recipes package.json dist/",
     "test:built": "bun run test/built-workbench.ts",
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun test && bun run build && bun run test:built"
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run test:built"
   },
   "keywords": [
     "ai",

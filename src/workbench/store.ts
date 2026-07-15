@@ -1,19 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { exportCircularProjectIcon, imageDimensions, validateImageBytes } from "../image-tools";
 import {
-  MODEL_CAPABILITIES,
+  type AspectRatio,
   estimateImageCost,
   getModelCapability,
-  validateKnownModelSettings,
-  type AspectRatio,
   type ImageSize,
+  MODEL_CAPABILITIES,
+  validateKnownModelSettings,
 } from "../models";
 import { packageRoot } from "../paths";
-import { loadRecipes, renderRecipe, type Recipe } from "./recipes";
+import { loadRecipes, type Recipe, renderRecipe } from "./recipes";
 
 export const MAX_REFERENCE_COUNT = 14;
 export const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
@@ -90,13 +90,32 @@ export interface ExportRecord {
   manifestSha256?: string;
 }
 
+export type SessionStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+const SESSION_STATUSES: readonly SessionStatus[] = [
+  "queued",
+  "running",
+  "completed",
+  "partial",
+  "failed",
+  "cancelled",
+  "interrupted",
+];
+
 export interface SessionManifest {
   schemaVersion: 1;
   id: string;
   createdAt: string;
   updatedAt: string;
   derivedFromSessionId?: string;
-  status: "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  status: SessionStatus;
   tool: { name: "nano-banana-workbench"; version: string; gitCommit?: string };
   subject: string;
   provider: "nano-banana";
@@ -142,6 +161,17 @@ export interface CreateSessionInput {
   derivedFromSessionId?: string;
   inheritReferences?: boolean;
   confirmationAcknowledged?: boolean;
+}
+
+export interface SpendSummary {
+  status: "complete" | "upper-bound" | "partial" | "unavailable";
+  calculatedUsd?: number;
+  upperBoundUsd?: number;
+  calculatedCount: number;
+  upperBoundCount: number;
+  unavailableCount: number;
+  unknownMayBeChargedCount: number;
+  unknownGroundingChargeCount: number;
 }
 
 export class WorkbenchError extends Error {
@@ -190,6 +220,7 @@ function deriveSessionStatus(manifest: SessionManifest): SessionManifest["status
   if (candidates.every((candidate) => candidate.status === "cancel-requested")) {
     return "cancelled";
   }
+  if (candidates.some((candidate) => candidate.status === "interrupted")) return "interrupted";
   return "failed";
 }
 
@@ -678,8 +709,12 @@ export class SessionStore {
     return records;
   }
 
-  async selectCandidate(sessionId: string, candidateId: string) {
+  async selectCandidate(sessionId: string, candidateId: string | null) {
     return this.updateSession(sessionId, (manifest) => {
+      if (candidateId === null) {
+        delete manifest.selectedCandidateId;
+        return;
+      }
       const { candidate } = this.findCandidate(manifest, candidateId);
       if (candidate.status !== "succeeded") {
         throw new WorkbenchError(
@@ -806,7 +841,6 @@ export class SessionStore {
         production,
       };
       const bundleManifest = structuredClone(manifest);
-      bundleManifest.selectedCandidateId = candidateId;
       bundleManifest.exports.push(record);
       bundleManifest.updatedAt = new Date().toISOString();
       const bundleManifestPath = join(stageDirectory, "manifest.json");
@@ -831,7 +865,6 @@ export class SessionStore {
           ) {
             throw new WorkbenchError("candidate_changed", "Candidate changed during export.", 409);
           }
-          latest.selectedCandidateId = candidateId;
           latest.exports.push(structuredClone(record));
         });
       } catch (error) {
@@ -861,54 +894,197 @@ export class SessionStore {
     return { path, image };
   }
 
-  async listHistory() {
+  private async readStoredSessions(skipUnreadable = false) {
     const sessions: SessionManifest[] = [];
     let dateDirectories: string[] = [];
     try {
       await this.assertSafeStoragePath(this.sessionsRoot);
       dateDirectories = await readdir(this.sessionsRoot);
-    } catch {}
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if (error instanceof WorkbenchError) throw error;
+      throw new WorkbenchError("history_read_failed", "Stored history could not be read.", 500);
+    }
     for (const date of dateDirectories.sort().reverse()) {
       let entries: string[] = [];
       try {
         const dateDirectory = this.safePath(this.sessionsRoot, date);
         await this.assertSafeStoragePath(dateDirectory);
         entries = await readdir(dateDirectory);
-      } catch {}
+      } catch (error) {
+        if (error instanceof WorkbenchError) throw error;
+        if (skipUnreadable) continue;
+        throw new WorkbenchError("history_read_failed", "Stored history could not be read.", 500);
+      }
       for (const id of entries.sort().reverse()) {
         try {
-          sessions.push(await this.readSession(id));
-        } catch {}
+          if (id.slice(0, 10) !== date) throw new Error("Session directory date mismatch.");
+          const manifest = await this.readSession(id);
+          if (
+            manifest.schemaVersion !== 1 ||
+            manifest.id !== id ||
+            typeof manifest.createdAt !== "string" ||
+            typeof manifest.updatedAt !== "string" ||
+            !SESSION_STATUSES.includes(manifest.status) ||
+            typeof manifest.subject !== "string" ||
+            typeof manifest.settings !== "object" ||
+            manifest.settings === null ||
+            typeof manifest.settings.googleSearch !== "boolean" ||
+            typeof manifest.estimate !== "object" ||
+            manifest.estimate === null ||
+            typeof manifest.estimate.excludesGrounding !== "boolean" ||
+            manifest.estimate.excludesGrounding !== manifest.settings.googleSearch ||
+            !Array.isArray(manifest.arms) ||
+            manifest.arms.some(
+              (arm) =>
+                typeof arm?.recipe?.name !== "string" ||
+                !Array.isArray(arm.candidates) ||
+                arm.candidates.some(
+                  (candidate) =>
+                    typeof candidate !== "object" ||
+                    candidate === null ||
+                    !Array.isArray(candidate.images) ||
+                    (candidate.cost !== undefined &&
+                      (typeof candidate.cost !== "object" ||
+                        candidate.cost === null ||
+                        !["calculated", "upper-bound", "unavailable"].includes(
+                          candidate.cost.status,
+                        ) ||
+                        typeof candidate.cost.excludesGrounding !== "boolean" ||
+                        candidate.cost.excludesGrounding !== manifest.settings.googleSearch ||
+                        ((candidate.cost.status === "calculated" ||
+                          candidate.cost.status === "upper-bound") &&
+                          !Number.isFinite(candidate.cost.usd)) ||
+                        (candidate.cost.status === "unavailable" &&
+                          candidate.cost.usd !== undefined))),
+                ),
+            )
+          ) {
+            throw new Error("Invalid session manifest.");
+          }
+          sessions.push(manifest);
+        } catch (error) {
+          if (
+            error instanceof WorkbenchError &&
+            ["path_outside_root", "unsafe_storage_path"].includes(error.code)
+          ) {
+            throw error;
+          }
+          if (skipUnreadable) continue;
+          throw new WorkbenchError("history_read_failed", "Stored history could not be read.", 500);
+        }
       }
     }
-    return sessions.map((manifest) => ({
-      id: manifest.id,
-      createdAt: manifest.createdAt,
-      updatedAt: manifest.updatedAt,
-      status: manifest.status,
-      subject: manifest.subject,
-      recipes: manifest.arms.map((arm) => arm.recipe.name),
-      settings: manifest.settings,
-      estimate: manifest.estimate,
-      usageCostUsd: manifest.arms
-        .flatMap((arm) => arm.candidates)
-        .reduce((sum, candidate) => sum + (candidate.cost?.usd ?? 0), 0),
-      costStatus: manifest.arms
-        .flatMap((arm) => arm.candidates)
-        .some((candidate) => candidate.cost?.status === "upper-bound")
-        ? "upper-bound"
-        : manifest.arms
-              .flatMap((arm) => arm.candidates)
-              .some((candidate) => candidate.cost?.status === "calculated")
-          ? "calculated"
-          : "unavailable",
-      selectedCandidateId: manifest.selectedCandidateId,
-    }));
+    return sessions;
+  }
+
+  async listHistory() {
+    const sessions = await this.readStoredSessions();
+    return sessions.map((manifest) => {
+      const candidates = manifest.arms.flatMap((arm) => arm.candidates);
+      let calculatedUsd = 0;
+      let upperBoundUsd = 0;
+      let calculatedCount = 0;
+      let upperBoundCount = 0;
+      let unavailableCount = 0;
+      let unknownMayBeChargedCount = 0;
+      let unknownGroundingChargeCount = 0;
+      for (const candidate of candidates) {
+        if (candidate.cost?.excludesGrounding) unknownGroundingChargeCount++;
+        if (candidate.cost?.status === "calculated" && candidate.cost.usd !== undefined) {
+          calculatedUsd += candidate.cost.usd;
+          calculatedCount++;
+        } else if (candidate.cost?.status === "upper-bound" && candidate.cost.usd !== undefined) {
+          upperBoundUsd += candidate.cost.usd;
+          upperBoundCount++;
+        } else if (candidate.cancellation?.billing === "unknown-may-be-charged") {
+          unknownMayBeChargedCount++;
+        } else if (candidate.cancellation?.billing !== "not-submitted") {
+          unavailableCount++;
+        }
+      }
+      const hasKnownCost = calculatedCount + upperBoundCount > 0;
+      const hasUnknownCost =
+        unavailableCount + unknownMayBeChargedCount + unknownGroundingChargeCount > 0;
+      const spend: SpendSummary = {
+        status: hasUnknownCost
+          ? hasKnownCost
+            ? "partial"
+            : "unavailable"
+          : upperBoundCount
+            ? "upper-bound"
+            : "complete",
+        calculatedUsd: calculatedCount ? calculatedUsd : undefined,
+        upperBoundUsd: upperBoundCount ? upperBoundUsd : undefined,
+        calculatedCount,
+        upperBoundCount,
+        unavailableCount,
+        unknownMayBeChargedCount,
+        unknownGroundingChargeCount,
+      };
+      return {
+        id: manifest.id,
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+        status: manifest.status,
+        subject: manifest.subject,
+        recipes: manifest.arms.map((arm) => arm.recipe.name),
+        settings: manifest.settings,
+        estimate: manifest.estimate,
+        generatedImageCount: candidates.reduce(
+          (sum, candidate) =>
+            sum + (candidate.status === "succeeded" ? candidate.images.length : 0),
+          0,
+        ),
+        spend,
+        selectedCandidateId: manifest.selectedCandidateId,
+      };
+    });
+  }
+
+  private async countPhysicalSessions() {
+    await this.assertSafeStoragePath(this.sessionsRoot, true);
+    let dateDirectories: string[];
+    try {
+      dateDirectories = await readdir(this.sessionsRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    let count = 0;
+    for (const date of dateDirectories) {
+      const dateDirectory = this.safePath(this.sessionsRoot, date);
+      await this.assertSafeStoragePath(dateDirectory);
+      const entries = await readdir(dateDirectory);
+      for (const entry of entries) {
+        await this.assertSafeStoragePath(this.safePath(dateDirectory, entry));
+        count++;
+      }
+    }
+    return count;
+  }
+
+  async clearAllSessions() {
+    try {
+      const cleared = await this.countPhysicalSessions();
+      await rm(this.sessionsRoot, { recursive: true, force: true });
+      await this.ensureSafeDirectory(this.sessionsRoot);
+      return { cleared };
+    } catch (error) {
+      if (
+        error instanceof WorkbenchError &&
+        ["path_outside_root", "unsafe_storage_path"].includes(error.code)
+      ) {
+        throw error;
+      }
+      throw new WorkbenchError("history_clear_failed", "Failed to clear workbench history.", 500, {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async recoverInterruptedSessions() {
-    for (const summary of await this.listHistory()) {
-      const manifest = await this.readSession(summary.id);
+    for (const manifest of await this.readStoredSessions(true)) {
       if (
         !manifest.arms.some((arm) =>
           arm.candidates.some((candidate) => ["queued", "running"].includes(candidate.status)),
