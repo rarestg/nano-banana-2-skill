@@ -90,30 +90,20 @@ async function elementContrast(page: Page, selector: string) {
 }
 
 describe("workbench browser contract", () => {
-  test("makes output and palette state explicit without interactive exact-color duplicates", async () => {
+  test("keeps selector cards compact without redundant state or exact-color rows", async () => {
     const { page } = await openWorkbench();
 
     const icon = page.locator('input[name="output-family"][value="icon"]');
     const image = page.locator('input[name="output-family"][value="image"]');
-    expect(await icon.locator("+ span .output-state .checked").isVisible()).toBe(true);
-    expect(await icon.locator("+ span .output-state .unchecked").isVisible()).toBe(false);
-    expect(await image.locator("+ span .output-state .unchecked").isVisible()).toBe(true);
+    expect(await page.locator(".output-state, .recipe-state, .palette-state").count()).toBe(0);
+    expect(await page.locator("#palette-preview").count()).toBe(0);
+    expect(await page.locator("#palette-picker").textContent()).not.toContain("#FAFAFA");
 
     await page.emulateMedia({ forcedColors: "active" });
-    expect(await icon.locator("+ span .output-state .checked").isVisible()).toBe(true);
     expect(
       await icon.locator("+ span").evaluate((card) => getComputedStyle(card).borderWidth),
     ).toBe("2px");
     await page.emulateMedia({ forcedColors: "none" });
-
-    expect(await page.locator("#palette-preview input, #palette-preview code").count()).toBe(0);
-    expect(await page.locator("ul#palette-preview > li.color-chip").count()).toBe(6);
-    expect(
-      await page.locator("#palette-preview .color-swatch").first().getAttribute("aria-hidden"),
-    ).toBe("true");
-    const paletteTree = await page.locator("#palette-preview").ariaSnapshot();
-    expect(paletteTree).toContain("Exact palette colors");
-    expect(paletteTree.match(/#FAFAFA/g)?.length).toBe(1);
 
     const flat = page.locator('input[name="recipe"][value="folio-flat-cut-paper"]');
     const custom = page.locator('input[name="recipe"][value="custom-icon"]');
@@ -126,24 +116,10 @@ describe("workbench browser contract", () => {
       "Palette not used. Custom uses the subject as its complete prompt, so no palette is inserted.",
     );
     expect(await page.locator("#palette-picker").getAttribute("disabled")).not.toBeNull();
-    expect(
-      await page.locator("#palette-preview").evaluate((preview) => ({
-        filter: getComputedStyle(preview).filter,
-        opacity: getComputedStyle(preview).opacity,
-      })),
-    ).toEqual({ filter: "grayscale(1)", opacity: "0.45" });
-    const selectedPalette = page.locator('.palette-option:has(input[name="palette"]:checked)');
-    const unselectedPalette = page
-      .locator('.palette-option:has(input[name="palette"]:not(:checked))')
-      .first();
-    expect(await selectedPalette.locator(".palette-state .checked").isVisible()).toBe(false);
-    expect(await selectedPalette.locator(".palette-state .unchecked").isVisible()).toBe(false);
-    expect(await selectedPalette.locator(".palette-state .unavailable").isVisible()).toBe(true);
-    expect(await unselectedPalette.locator(".palette-state .unavailable").isVisible()).toBe(false);
 
     await image.check();
     expect(await page.locator("#recipe-feedback").textContent()).toBe("");
-    expect(await image.locator("+ span .output-state .checked").isVisible()).toBe(true);
+    expect(await image.isChecked()).toBe(true);
   });
 
   test("uses a collapsed history rail, accessible candidate identity, and a no-scroll contact sheet", async () => {
@@ -202,11 +178,6 @@ describe("workbench browser contract", () => {
     expect(await page.locator('input[name="palette"][value="folio-teal"]').isChecked()).toBe(true);
     expect(
       await page
-        .locator('input[name="palette"][value="folio-teal"] + .palette-card .checked')
-        .isVisible(),
-    ).toBe(true);
-    expect(
-      await page
         .locator(".palette-options")
         .evaluate((options) => getComputedStyle(options).gridTemplateColumns.split(" ").length),
     ).toBe(7);
@@ -217,17 +188,13 @@ describe("workbench browser contract", () => {
         .evaluate((options) => getComputedStyle(options).gridTemplateColumns.split(" ").length),
     ).toBe(4);
     await page.setViewportSize({ width: 1440, height: 1000 });
-    expect(await page.locator("#palette-preview .color-chip").count()).toBe(6);
     await page.locator('input[name="palette"][value="pastel-prism"]').check();
-    expect(await page.locator("#palette-preview .color-chip").count()).toBe(12);
     expect(await page.locator("#palette-description").textContent()).toContain(
       "broad twelve-color spectrum",
     );
-    expect(
-      await page
-        .locator('input[name="palette"][value="pastel-prism"] + .palette-card .checked')
-        .isVisible(),
-    ).toBe(true);
+    expect(await page.locator('input[name="palette"][value="pastel-prism"]').isChecked()).toBe(
+      true,
+    );
     await page.locator('input[name="palette"][value="sunlit-coral"]').check();
 
     const flat = page.locator('input[name="recipe"][value="folio-flat-cut-paper"]');
@@ -534,15 +501,24 @@ describe("workbench browser contract", () => {
     expect(await page.evaluate(() => scrollY)).toBe(0);
   }, 30_000);
 
-  test("downloads selected assets in the browser without creating durable exports", async () => {
+  test("downloads individual and selected assets without creating durable exports", async () => {
     const { instance, page } = await openWorkbench();
     await generate(page, "Remote browser download.", 1);
+    expect(await page.locator('[data-download="candidate-1-1"]').textContent()).toBe(
+      "Download candidate as ZIP",
+    );
+    const singleDownloadPromise = page.waitForEvent("download");
+    await page.locator('[data-download="candidate-1-1"]').click();
+    const singleDownload = await singleDownloadPromise;
+    expect(await page.locator('[data-export-select="candidate-1-1"]').isChecked()).toBe(false);
+
     await page.locator('[data-export-select="candidate-1-1"]').check();
     expect(await page.locator("[data-download-selected]").textContent()).toBe("Download ZIP (1)");
     const downloadPromise = page.waitForEvent("download");
     await page.locator("[data-download-selected]").click();
     const download = await downloadPromise;
     const history = await instance.store.listHistory();
+    expect(singleDownload.suggestedFilename()).toBe(`nano-banana-${history[0].id}.zip`);
     expect(download.suggestedFilename()).toBe(`nano-banana-${history[0].id}.zip`);
     const path = await download.path();
     if (!path) throw new Error("Expected browser download path.");

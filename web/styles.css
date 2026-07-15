@@ -633,7 +633,7 @@ textarea {
 }
 
 .output-option > span {
-  min-height: 64px;
+  min-height: 56px;
   padding: var(--space-2) var(--space-3);
   display: flex;
   flex-direction: column;
@@ -649,31 +649,9 @@ textarea {
   font-size: var(--type-caption);
 }
 
-.output-state {
-  margin-top: auto;
-  padding-top: var(--space-2);
-  color: var(--muted);
-  font-size: var(--type-caption);
-  font-weight: 800;
-}
-
-.output-state .checked {
-  display: none;
-  color: var(--text);
-}
-
 .output-option input:checked + span {
-  border-color: var(--accent);
+  border: 2px solid var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.output-option input:checked + span .checked {
-  display: inline;
-}
-
-.output-option input:checked + span .unchecked {
-  display: none;
 }
 
 .output-option input:focus-visible + span {
@@ -705,7 +683,7 @@ textarea {
 
 .palette-card {
   width: 100%;
-  min-height: 104px;
+  min-height: 88px;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -733,39 +711,13 @@ textarea {
   font-size: var(--type-caption);
 }
 
-.palette-state {
-  margin-top: auto;
-  padding-top: var(--space-2);
-  color: var(--muted);
-  font-size: var(--type-caption);
-  font-weight: 800;
-}
-
-.palette-state .checked {
-  display: none;
-  color: var(--text);
-}
-
-.palette-state .unavailable {
-  display: none;
-}
-
 .palette-option:hover > input:not(:disabled) + .palette-card {
   border-color: var(--accent);
 }
 
 .palette-option > input:checked + .palette-card {
-  border-color: var(--accent);
+  border: 2px solid var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.palette-option > input:checked + .palette-card .checked {
-  display: inline;
-}
-
-.palette-option > input:checked + .palette-card .unchecked {
-  display: none;
 }
 
 .palette-option > input:focus-visible + .palette-card {
@@ -779,51 +731,8 @@ textarea {
 }
 
 .palette-picker:disabled .palette-option > input:checked + .palette-card {
-  border-color: var(--line);
-  background: var(--surface-muted);
-  box-shadow: none;
-}
-
-.palette-picker:disabled .palette-option > input + .palette-card .checked,
-.palette-picker:disabled .palette-option > input + .palette-card .unchecked {
-  display: none;
-}
-
-.palette-picker:disabled .palette-option > input:checked + .palette-card .unavailable {
-  display: inline;
-}
-
-.palette-preview {
-  display: flex;
-  gap: var(--space-2);
-  overflow-x: auto;
-  margin: 0;
-  padding: var(--space-2) 0;
-  list-style: none;
-}
-
-.color-chip {
-  flex: none;
-  display: grid;
-  justify-items: center;
-  gap: var(--space-1);
-}
-
-.color-swatch {
-  width: 36px;
-  height: 28px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.color-value {
-  color: var(--muted);
-  font-size: var(--type-caption);
-}
-
-.palette-picker:disabled .palette-preview {
-  filter: grayscale(1);
-  opacity: 0.45;
+  background: var(--surface-muted);
 }
 
 #palette-description {
@@ -832,17 +741,6 @@ textarea {
 
 #palette-status:empty {
   display: none;
-}
-
-@media (forced-colors: active) {
-  .output-option input:checked + span {
-    border: 2px solid Highlight;
-    box-shadow: none;
-  }
-
-  .output-state .checked {
-    color: CanvasText;
-  }
 }
 
 .recipe-grid {
@@ -864,7 +762,7 @@ textarea {
 
 .recipe-card {
   width: 100%;
-  min-height: 104px;
+  min-height: 88px;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -885,39 +783,32 @@ textarea {
 }
 
 .recipe-option input:checked + .recipe-card {
-  border-color: var(--accent);
+  border: 2px solid var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .recipe-option input:checked + .recipe-card small {
   color: var(--text);
 }
 
-.recipe-state {
-  margin-top: auto;
-  padding-top: var(--space-2);
-  color: var(--muted);
-  font-size: var(--type-caption);
-  font-weight: 800;
-}
-
-.recipe-state .checked {
-  display: none;
-  color: var(--text);
-}
-
-.recipe-option input:checked + .recipe-card .checked {
-  display: inline;
-}
-
-.recipe-option input:checked + .recipe-card .unchecked {
-  display: none;
-}
-
 .recipe-option input:focus-visible + .recipe-card {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .output-option input:checked + span,
+  .palette-option > input:checked:not(:disabled) + .palette-card,
+  .recipe-option input:checked + .recipe-card {
+    border: 2px solid Highlight;
+    box-shadow: none;
+  }
+
+  .output-option input:focus-visible + span,
+  .palette-option > input:focus-visible + .palette-card,
+  .recipe-option input:focus-visible + .recipe-card {
+    outline-color: Highlight;
+  }
 }
 
 .field-feedback {
@@ -1459,6 +1350,11 @@ textarea {
 
 .inspector-section button {
   width: 100%;
+}
+
+.inspector-actions {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .inspector-recovery {

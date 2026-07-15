@@ -41,6 +41,7 @@ const focusAttributes = [
   "data-export-select",
   "data-primary",
   "data-clear-primary",
+  "data-download",
   "data-export",
   "data-export-selected",
   "data-download-selected",
@@ -121,7 +122,7 @@ function renderRecipes() {
     .map(
       (recipe) => `<label class="recipe-option">
         <input type="checkbox" name="recipe" value="${recipe.id}">
-        <span class="recipe-card"><strong>${escapeHtml(recipe.name)}</strong><small>${escapeHtml(recipe.description)}</small><span class="recipe-state" aria-hidden="true"><span class="checked">✓ Included</span><span class="unchecked">Include</span></span></span>
+        <span class="recipe-card"><strong>${escapeHtml(recipe.name)}</strong><small>${escapeHtml(recipe.description)}</small></span>
       </label>`,
     )
     .join("");
@@ -164,7 +165,7 @@ function renderRecipes() {
       }
       state.recipeSelections[state.recipeFamily] = selectedRecipeIds();
       updatePaletteAvailability();
-      updatePalettePreview();
+      updatePaletteDescription();
       updateEstimate();
     });
   }
@@ -179,7 +180,7 @@ function setRecipeFamily(family) {
   renderOutputOptions();
   renderRecipes();
   applyFamilyConstraints();
-  updatePalettePreview();
+  updatePaletteDescription();
   updateEstimate();
 }
 
@@ -192,7 +193,6 @@ function renderPalettes() {
           <svg class="palette-swatch" viewBox="0 0 ${palette.colors.length} 1" preserveAspectRatio="none" focusable="false" aria-hidden="true">${palette.colors.map((color, index) => `<rect x="${index}" y="0" width="1" height="1" fill="${escapeHtml(color)}"></rect>`).join("")}</svg>
           <strong>${escapeHtml(palette.name)}</strong>
           <small>${palette.colors.length} colors</small>
-          <span class="palette-state" aria-hidden="true"><span class="checked">✓ Selected</span><span class="unchecked">Select</span><span class="unavailable">Not used</span></span>
         </span>
       </label>`,
     )
@@ -201,19 +201,13 @@ function renderPalettes() {
     `input[name="palette"][value="${CSS.escape(state.bootstrap.defaults.paletteId)}"]`,
   );
   if (defaultPalette) defaultPalette.checked = true;
-  updatePalettePreview();
+  updatePaletteDescription();
 }
 
-function updatePalettePreview() {
+function updatePaletteDescription() {
   if (!state.bootstrap) return;
   const palette = state.bootstrap.palettes.find((item) => item.id === selectedPaletteId());
   if (!palette) return;
-  $("#palette-preview").innerHTML = palette.colors
-    .map(
-      (color) =>
-        `<li class="color-chip"><span class="color-swatch" style="background-color: ${escapeHtml(color)}" aria-hidden="true"></span><span class="color-value">${escapeHtml(color)}</span></li>`,
-    )
-    .join("");
   const unused = customRecipeOnly();
   $("#palette-status").textContent = unused ? "Palette not used." : "";
   $("#palette-description-copy").textContent = unused
@@ -607,7 +601,7 @@ function renderInspector(session) {
       showTerminalRecovery
         ? ""
         : `<div class="inspector-section"><h3>Primary</h3><p>${primary ? "This is the Primary candidate for the run." : "Primary is optional and does not control exports."}</p>${primary ? '<button type="button" data-clear-primary>Clear Primary</button>' : `<button type="button" data-primary="${candidate.id}" ${ready ? "" : "disabled"}>Set as Primary</button>`}</div>
-    <div class="inspector-section"><h3>Export</h3><p>${exportedCount ? `Exported ${exportedCount} time${exportedCount === 1 ? "" : "s"}.` : "Export this candidate without changing Primary or the export checklist."}</p><button class="primary" type="button" data-export="${candidate.id}" ${exportReady ? (state.exporting ? 'aria-disabled="true"' : "") : "disabled"}>Export candidate to disk</button></div>`
+    <div class="inspector-section"><h3>Download or export</h3><p>Download a ZIP to this browser, or save a durable export on the Workbench server.</p><div class="inspector-actions"><button class="primary" type="button" data-download="${candidate.id}" ${exportReady ? "" : "disabled"}>Download candidate as ZIP</button><button type="button" data-export="${candidate.id}" ${exportReady ? (state.exporting ? 'aria-disabled="true"' : "") : "disabled"}>${state.exporting ? "Exporting…" : "Export candidate to disk"}</button></div>${exportedCount ? `<p>Exported to disk ${exportedCount} time${exportedCount === 1 ? "" : "s"}.</p>` : ""}</div>`
     }
   </div>`;
   restoreFocus(container, focusedControl);
@@ -694,11 +688,11 @@ function renderExportTray() {
   restoreFocus(tray, focusedControl);
 }
 
-function downloadSelected() {
+function downloadCandidates(candidateIds) {
   const sessionId = state.currentSession?.id;
-  if (!sessionId || !state.exportSelectedIds.size) return;
+  if (!sessionId || !candidateIds.length) return;
   const parameters = new URLSearchParams();
-  for (const candidateId of state.exportSelectedIds) {
+  for (const candidateId of candidateIds) {
     parameters.append("candidateId", candidateId);
   }
   const link = document.createElement("a");
@@ -708,8 +702,12 @@ function downloadSelected() {
   link.click();
   link.remove();
   showSessionMessage(
-    `Browser download started for ${state.exportSelectedIds.size} selected candidate${state.exportSelectedIds.size === 1 ? "" : "s"}.`,
+    `Browser download started for ${candidateIds.length} candidate${candidateIds.length === 1 ? "" : "s"}.`,
   );
+}
+
+function downloadSelected() {
+  downloadCandidates([...state.exportSelectedIds]);
 }
 
 const graphemeSegmenter =
@@ -1153,7 +1151,7 @@ function setFocusedCandidate(candidateId) {
 function focusInspectorAction() {
   $("#candidate-inspector")
     .querySelector(
-      "[data-terminal-recovery], [data-primary]:not(:disabled), [data-clear-primary], [data-export]:not(:disabled)",
+      "[data-terminal-recovery], [data-primary]:not(:disabled), [data-clear-primary], [data-download]:not(:disabled), [data-export]:not(:disabled)",
     )
     ?.focus();
 }
@@ -1176,7 +1174,7 @@ function loadSessionIntoForm(session) {
     `input[name="palette"][value="${CSS.escape(session.palette?.id || state.bootstrap.defaults.paletteId)}"]`,
   );
   if (palette) palette.checked = true;
-  updatePalettePreview();
+  updatePaletteDescription();
   $("#model").value = session.settings.modelId;
   updateModelSettings();
   $("#size").value = session.settings.size;
@@ -1463,7 +1461,7 @@ $("#aspect").addEventListener("change", () => {
 });
 $("#variants").addEventListener("input", updateEstimate);
 $("#subject").addEventListener("input", updateSubjectCount);
-$("#palette-options").addEventListener("change", updatePalettePreview);
+$("#palette-options").addEventListener("change", updatePaletteDescription);
 $("#references").addEventListener("change", (event) => {
   state.inheritReferences = false;
   state.references.push(...event.target.files);
@@ -1521,6 +1519,8 @@ $("#candidate-inspector").addEventListener("click", (event) => {
   const primary = event.target.closest("[data-primary]");
   if (primary) void setPrimary(primary.dataset.primary);
   if (event.target.closest("[data-clear-primary]")) void setPrimary(null);
+  const downloadButton = event.target.closest("[data-download]");
+  if (downloadButton) downloadCandidates([downloadButton.dataset.download]);
   const exportButton = event.target.closest("[data-export]");
   if (exportButton) void exportCandidate(exportButton.dataset.export);
   if (event.target.closest("[data-terminal-recovery]") && state.currentSession) {
