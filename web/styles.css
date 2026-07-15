@@ -736,7 +736,7 @@ textarea {
 }
 
 #palette-description {
-  margin: 0;
+  margin: var(--space-2) 0 0;
 }
 
 #palette-status:empty {

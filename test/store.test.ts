@@ -151,6 +151,59 @@ describe("durable sessions", () => {
     ).rejects.toMatchObject({ code: "invalid_download_selection" });
   });
 
+  test("converts a staged copy of the single verified icon source read", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nano-banana-workbench-test-"));
+    roots.push(root);
+    const trustedBytes = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#00BBA7"/></svg>',
+    );
+    const replacementBytes = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#F43F5E"/></svg>',
+    );
+
+    class ReplacingSourceStore extends SessionStore {
+      sourcePath?: string;
+      sourceReads = 0;
+
+      override async readSessionFile(sessionId: string, relativePath: string) {
+        const bytes = await super.readSessionFile(sessionId, relativePath);
+        if (relativePath === this.sourcePath) {
+          this.sourceReads += 1;
+          await writeFile(this.pathInSession(sessionId, relativePath), replacementBytes);
+        }
+        return bytes;
+      }
+    }
+
+    const store = new ReplacingSourceStore(root);
+    await store.initialize();
+    const session = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const images = await store.saveCandidateImages(session.id, "candidate-1-1", [
+      { bytes: trustedBytes, mimeType: "image/svg+xml" },
+    ]);
+    await store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    store.sourcePath = images[0].path;
+
+    const download = await store.prepareDownloadAssets(session.id, ["candidate-1-1"]);
+    expect(store.sourceReads).toBe(1);
+    expect(download.assets[0].name).toBe("01-folio-geometric-isometric-variant-1.png");
+    expect(
+      await validateImageBytes(download.assets[0].bytes, "image/png", join(root, "validation")),
+    ).toMatchObject({ width: 384, height: 384 });
+    const downloadedPath = join(root, "downloaded.png");
+    await writeFile(downloadedPath, download.assets[0].bytes);
+    const center = await runCommand("convert", [
+      downloadedPath,
+      "-format",
+      "%[pixel:p{192,192}]",
+      "info:",
+    ]);
+    expect(center.stdout).toMatch(/(?:0,187,167|#00BBA7)/i);
+  }, 15_000);
+
   test("keeps hostile stored metadata out of temp paths and cleans up failed conversions", async () => {
     const { root, store } = await temporaryStore();
     roots.push(root);

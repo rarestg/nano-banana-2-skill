@@ -977,8 +977,11 @@ export class SessionStore {
 
     try {
       for (const [index, candidateId] of orderedIds.entries()) {
-        const { arm, candidate, source, sourceBytes, sourcePath } =
-          await this.verifiedCandidateSource(sessionId, manifest, candidateId);
+        const { arm, candidate, source, sourceBytes } = await this.verifiedCandidateSource(
+          sessionId,
+          manifest,
+          candidateId,
+        );
         actualBytes += sourceBytes.length;
         if (actualBytes > MAX_DOWNLOAD_ASSET_BYTES) {
           throw new WorkbenchError(
@@ -994,8 +997,11 @@ export class SessionStore {
         let bytes: Uint8Array;
         if (arm.recipe.export.type === "folio-icon") {
           name = `${baseName}.png`;
+          const sourceExtension = extensionForMime(source.mimeType);
+          const stagedSourcePath = join(temporaryDirectory, `${prefix}-source${sourceExtension}`);
           const outputPath = join(temporaryDirectory, `${prefix}.png`);
-          await exportCircularProjectIcon(sourcePath, outputPath);
+          await writeFile(stagedSourcePath, sourceBytes, { mode: 0o600, flag: "wx" });
+          await exportCircularProjectIcon(stagedSourcePath, outputPath);
           const dimensions = await imageDimensions(outputPath);
           if (dimensions.width !== 384 || dimensions.height !== 384) {
             throw new Error("Downloaded icon has unexpected dimensions.");

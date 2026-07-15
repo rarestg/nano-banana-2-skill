@@ -8,6 +8,7 @@ const ZIP_VERSION = 20;
 const ZIP_VERSION_MADE_BY = 0x0314; // Unix, ZIP 2.0
 const DOS_TIME = 0;
 const DOS_DATE = 0x21; // 1980-01-01
+const STREAM_CHUNK_SIZE = 64 * 1024;
 
 export const MAX_STORED_ZIP_ENTRIES = MAX_UINT16 - 1;
 
@@ -20,6 +21,13 @@ interface PreparedEntry extends StoredZipEntry {
   crc32: number;
   localOffset: number;
   nameBytes: Uint8Array;
+}
+
+interface PreparedZip {
+  archiveSize: number;
+  centralSize: number;
+  entries: PreparedEntry[];
+  localSize: number;
 }
 
 const crc32Table = new Uint32Array(256);
@@ -55,7 +63,7 @@ function addSize(total: number, amount: number) {
   return result;
 }
 
-export function createStoredZip(entries: readonly StoredZipEntry[]) {
+function prepareStoredZip(entries: readonly StoredZipEntry[]): PreparedZip {
   if (!entries.length) throw new Error("ZIP archive requires at least one entry.");
   if (entries.length > MAX_STORED_ZIP_ENTRIES) {
     throw new Error(`ZIP archive supports at most ${MAX_STORED_ZIP_ENTRIES} entries.`);
@@ -96,63 +104,109 @@ export function createStoredZip(entries: readonly StoredZipEntry[]) {
     centralSize = addSize(centralSize, CENTRAL_DIRECTORY_HEADER_SIZE + nameBytes.length);
   }
 
-  let archiveSize = addSize(localSize, centralSize);
-  archiveSize = addSize(archiveSize, END_OF_CENTRAL_DIRECTORY_SIZE);
-  const output = new Uint8Array(archiveSize);
-  const view = new DataView(output.buffer);
+  return {
+    archiveSize: addSize(addSize(localSize, centralSize), END_OF_CENTRAL_DIRECTORY_SIZE),
+    centralSize,
+    entries: prepared,
+    localSize,
+  };
+}
+
+function localHeader(entry: PreparedEntry) {
+  const bytes = new Uint8Array(LOCAL_FILE_HEADER_SIZE);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, ZIP_VERSION, true);
+  view.setUint16(6, UTF8_FLAG, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, DOS_TIME, true);
+  view.setUint16(12, DOS_DATE, true);
+  view.setUint32(14, entry.crc32, true);
+  view.setUint32(18, entry.bytes.byteLength, true);
+  view.setUint32(22, entry.bytes.byteLength, true);
+  view.setUint16(26, entry.nameBytes.length, true);
+  view.setUint16(28, 0, true);
+  return bytes;
+}
+
+function centralHeader(entry: PreparedEntry) {
+  const bytes = new Uint8Array(CENTRAL_DIRECTORY_HEADER_SIZE);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, ZIP_VERSION_MADE_BY, true);
+  view.setUint16(6, ZIP_VERSION, true);
+  view.setUint16(8, UTF8_FLAG, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, DOS_TIME, true);
+  view.setUint16(14, DOS_DATE, true);
+  view.setUint32(16, entry.crc32, true);
+  view.setUint32(20, entry.bytes.byteLength, true);
+  view.setUint32(24, entry.bytes.byteLength, true);
+  view.setUint16(28, entry.nameBytes.length, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, 0, true);
+  view.setUint32(42, entry.localOffset, true);
+  return bytes;
+}
+
+function endHeader(zip: PreparedZip) {
+  const bytes = new Uint8Array(END_OF_CENTRAL_DIRECTORY_SIZE);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, zip.entries.length, true);
+  view.setUint16(10, zip.entries.length, true);
+  view.setUint32(12, zip.centralSize, true);
+  view.setUint32(16, zip.localSize, true);
+  view.setUint16(20, 0, true);
+  return bytes;
+}
+
+function* storedZipChunks(zip: PreparedZip) {
+  for (const entry of zip.entries) {
+    yield localHeader(entry);
+    yield entry.nameBytes;
+    for (let offset = 0; offset < entry.bytes.length; offset += STREAM_CHUNK_SIZE) {
+      yield entry.bytes.subarray(offset, offset + STREAM_CHUNK_SIZE);
+    }
+  }
+  for (const entry of zip.entries) {
+    yield centralHeader(entry);
+    yield entry.nameBytes;
+  }
+  yield endHeader(zip);
+}
+
+export function createStoredZip(entries: readonly StoredZipEntry[]) {
+  const zip = prepareStoredZip(entries);
+  const output = new Uint8Array(zip.archiveSize);
   let offset = 0;
-
-  for (const entry of prepared) {
-    view.setUint32(offset, 0x04034b50, true);
-    view.setUint16(offset + 4, ZIP_VERSION, true);
-    view.setUint16(offset + 6, UTF8_FLAG, true);
-    view.setUint16(offset + 8, 0, true);
-    view.setUint16(offset + 10, DOS_TIME, true);
-    view.setUint16(offset + 12, DOS_DATE, true);
-    view.setUint32(offset + 14, entry.crc32, true);
-    view.setUint32(offset + 18, entry.bytes.byteLength, true);
-    view.setUint32(offset + 22, entry.bytes.byteLength, true);
-    view.setUint16(offset + 26, entry.nameBytes.length, true);
-    view.setUint16(offset + 28, 0, true);
-    offset += LOCAL_FILE_HEADER_SIZE;
-    output.set(entry.nameBytes, offset);
-    offset += entry.nameBytes.length;
-    output.set(entry.bytes, offset);
-    offset += entry.bytes.byteLength;
+  for (const chunk of storedZipChunks(zip)) {
+    output.set(chunk, offset);
+    offset += chunk.length;
   }
-
-  const centralOffset = offset;
-  for (const entry of prepared) {
-    view.setUint32(offset, 0x02014b50, true);
-    view.setUint16(offset + 4, ZIP_VERSION_MADE_BY, true);
-    view.setUint16(offset + 6, ZIP_VERSION, true);
-    view.setUint16(offset + 8, UTF8_FLAG, true);
-    view.setUint16(offset + 10, 0, true);
-    view.setUint16(offset + 12, DOS_TIME, true);
-    view.setUint16(offset + 14, DOS_DATE, true);
-    view.setUint32(offset + 16, entry.crc32, true);
-    view.setUint32(offset + 20, entry.bytes.byteLength, true);
-    view.setUint32(offset + 24, entry.bytes.byteLength, true);
-    view.setUint16(offset + 28, entry.nameBytes.length, true);
-    view.setUint16(offset + 30, 0, true);
-    view.setUint16(offset + 32, 0, true);
-    view.setUint16(offset + 34, 0, true);
-    view.setUint16(offset + 36, 0, true);
-    view.setUint32(offset + 38, 0, true);
-    view.setUint32(offset + 42, entry.localOffset, true);
-    offset += CENTRAL_DIRECTORY_HEADER_SIZE;
-    output.set(entry.nameBytes, offset);
-    offset += entry.nameBytes.length;
-  }
-
-  view.setUint32(offset, 0x06054b50, true);
-  view.setUint16(offset + 4, 0, true);
-  view.setUint16(offset + 6, 0, true);
-  view.setUint16(offset + 8, prepared.length, true);
-  view.setUint16(offset + 10, prepared.length, true);
-  view.setUint32(offset + 12, centralSize, true);
-  view.setUint32(offset + 16, centralOffset, true);
-  view.setUint16(offset + 20, 0, true);
 
   return output;
+}
+
+export function createStoredZipStream(entries: readonly StoredZipEntry[]) {
+  const zip = prepareStoredZip(entries);
+  const chunks = storedZipChunks(zip);
+  return {
+    byteLength: zip.archiveSize,
+    stream: new ReadableStream<Uint8Array>({
+      cancel() {
+        chunks.return();
+      },
+      pull(controller) {
+        const next = chunks.next();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+    }),
+  };
 }

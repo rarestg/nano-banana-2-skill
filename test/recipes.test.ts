@@ -78,6 +78,24 @@ describe("provider-neutral recipes", () => {
     }
   });
 
+  test("rejects palette variables in custom recipes", async () => {
+    const recipes = await loadRecipes();
+    const custom = recipes.find((recipe) => recipe.id === "custom");
+    if (!custom) throw new Error("Expected built-in custom recipe.");
+    const directory = await mkdtemp(join(tmpdir(), "nano-banana-recipes-"));
+    try {
+      await writeFile(
+        join(directory, "invalid.json"),
+        JSON.stringify({ ...custom, promptTemplate: "{{subject}} {{colorPalette}}" }),
+      );
+      await expect(loadRecipes(directory)).rejects.toThrow(
+        /may only use the subject prompt variable/,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("strictly validates recipe preview and export discriminants", async () => {
     const base = {
       schemaVersion: 1,

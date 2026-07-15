@@ -18,7 +18,7 @@ import {
   type UploadedReference,
   WorkbenchError,
 } from "./store";
-import { createStoredZip } from "./zip";
+import { createStoredZipStream } from "./zip";
 
 const webRoot = join(packageRoot(), "web");
 const MAX_REQUEST_BYTES = MAX_TOTAL_REFERENCE_BYTES + 1024 * 1024;
@@ -424,16 +424,16 @@ export async function startWorkbench(options: WorkbenchOptions = {}) {
             ),
             "",
           ].join("\n");
-          const archive = createStoredZip([
+          const archive = createStoredZipStream([
             ...assets.map((asset) => ({ name: asset.name, bytes: asset.bytes })),
             { name: "manifest.txt", bytes: new TextEncoder().encode(manifestText) },
           ]);
           const filename = `nano-banana-${manifest.id}.zip`;
-          return new Response(archive, {
+          return new Response(archive.stream, {
             headers: {
               "Content-Type": "application/zip",
               "Content-Disposition": `attachment; filename="${filename}"`,
-              "Content-Length": String(archive.length),
+              "Content-Length": String(archive.byteLength),
               "Cache-Control": "private, no-store",
               "Content-Security-Policy": "default-src 'none'; sandbox",
               "Cross-Origin-Resource-Policy": "same-origin",

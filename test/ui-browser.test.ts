@@ -529,6 +529,59 @@ describe("workbench browser contract", () => {
     expect(await page.locator('[data-export-select="candidate-1-1"]').isChecked()).toBe(true);
   });
 
+  test("surfaces browser-download endpoint failures without saving an error response", async () => {
+    const { page } = await openWorkbench();
+    await generate(page, "Download failure feedback.", 1);
+    const failures = [
+      {
+        status: 409,
+        code: "source_changed",
+        message: "Selected candidate source changed. Generate it again before downloading.",
+      },
+      {
+        status: 413,
+        code: "download_too_large",
+        message: "Selected assets are too large to download together.",
+      },
+    ];
+    let downloads = 0;
+    page.on("download", () => downloads++);
+    await page.route(/\/api\/sessions\/[^/]+\/download\?/, (route) => {
+      const failure = failures.shift();
+      if (!failure) throw new Error("Unexpected download attempt.");
+      return route.fulfill({
+        status: failure.status,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: failure.code, message: failure.message } }),
+      });
+    });
+
+    for (const message of [
+      "Selected candidate source changed. Generate it again before downloading.",
+      "Selected assets are too large to download together.",
+    ]) {
+      await page.locator('[data-download="candidate-1-1"]').click();
+      await page.waitForFunction(
+        (expected) => document.querySelector("#session-message")?.textContent === expected,
+        message,
+      );
+      expect(await page.locator("#session-message").getAttribute("class")).toContain("error");
+    }
+    expect(downloads).toBe(0);
+  });
+
+  test("labels an absent historical palette snapshot as not recorded", async () => {
+    const { page } = await openWorkbench();
+    await page.route(/\/api\/sessions(?:\/[^/?]+)?$/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (body.session) delete body.session.palette;
+      await route.fulfill({ response, json: body });
+    });
+    await generate(page, "Legacy palette summary.", 1);
+    expect(await page.locator("#summary-settings").textContent()).toContain("PaletteNot recorded");
+  });
+
   test("keeps desktop candidate sheets on four equal tracks", async () => {
     const { page } = await openWorkbench({}, { width: 1600, height: 1000 });
 

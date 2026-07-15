@@ -649,7 +649,7 @@ function updateRunSummary(session) {
   $("#summary-recipes").textContent = session.arms.map((arm) => arm.recipe.name).join(" + ");
   $("#summary-subject").textContent = session.subject;
   const palette = session.arms.some((arm) => arm.recipe.kind !== "custom")
-    ? `<div><dt>Palette</dt><dd>${escapeHtml(session.palette?.name || "Folio teal")}</dd></div>`
+    ? `<div><dt>Palette</dt><dd>${escapeHtml(session.palette?.name ?? "Not recorded")}</dd></div>`
     : "";
   $("#summary-settings").innerHTML =
     `${palette}<div><dt>Model</dt><dd>${escapeHtml(modelShortLabel(session.settings.modelId))}</dd></div><div><dt>Resolution</dt><dd>${escapeHtml(formatSize(session.settings.size))}</dd></div><div><dt>Aspect</dt><dd>${escapeHtml(session.settings.aspectRatio || "default")}</dd></div><div><dt>Variants</dt><dd>${session.settings.variantsPerRecipe} per style</dd></div>`;
@@ -688,26 +688,42 @@ function renderExportTray() {
   restoreFocus(tray, focusedControl);
 }
 
-function downloadCandidates(candidateIds) {
+async function downloadCandidates(candidateIds) {
   const sessionId = state.currentSession?.id;
   if (!sessionId || !candidateIds.length) return;
   const parameters = new URLSearchParams();
   for (const candidateId of candidateIds) {
     parameters.append("candidateId", candidateId);
   }
-  const link = document.createElement("a");
-  link.href = `/api/sessions/${encodeURIComponent(sessionId)}/download?${parameters}`;
-  link.download = `nano-banana-${sessionId}.zip`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  showSessionMessage(
-    `Browser download started for ${candidateIds.length} candidate${candidateIds.length === 1 ? "" : "s"}.`,
-  );
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/download?${parameters}`,
+      { credentials: "same-origin" },
+    );
+    if (!response.ok) {
+      const body = response.headers.get("content-type")?.includes("application/json")
+        ? await response.json()
+        : null;
+      throw new Error(body?.error?.message || `Download failed (${response.status})`);
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = `nano-banana-${sessionId}.zip`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    showSessionMessage(
+      `Browser download started for ${candidateIds.length} candidate${candidateIds.length === 1 ? "" : "s"}.`,
+    );
+  } catch (error) {
+    showSessionMessage(error.message, true);
+  }
 }
 
 function downloadSelected() {
-  downloadCandidates([...state.exportSelectedIds]);
+  return downloadCandidates([...state.exportSelectedIds]);
 }
 
 const graphemeSegmenter =
@@ -1520,7 +1536,7 @@ $("#candidate-inspector").addEventListener("click", (event) => {
   if (primary) void setPrimary(primary.dataset.primary);
   if (event.target.closest("[data-clear-primary]")) void setPrimary(null);
   const downloadButton = event.target.closest("[data-download]");
-  if (downloadButton) downloadCandidates([downloadButton.dataset.download]);
+  if (downloadButton) void downloadCandidates([downloadButton.dataset.download]);
   const exportButton = event.target.closest("[data-export]");
   if (exportButton) void exportCandidate(exportButton.dataset.export);
   if (event.target.closest("[data-terminal-recovery]") && state.currentSession) {
@@ -1529,7 +1545,7 @@ $("#candidate-inspector").addEventListener("click", (event) => {
 });
 $("#export-tray").addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
-  if (event.target.closest("[data-download-selected]")) downloadSelected();
+  if (event.target.closest("[data-download-selected]")) void downloadSelected();
   if (event.target.closest("[data-export-selected]")) void exportSelected();
 });
 $("#regenerate").addEventListener("click", () => {

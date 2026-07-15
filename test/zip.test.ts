@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { createStoredZip, MAX_STORED_ZIP_ENTRIES, type StoredZipEntry } from "../src/workbench/zip";
+import {
+  createStoredZip,
+  createStoredZipStream,
+  MAX_STORED_ZIP_ENTRIES,
+  type StoredZipEntry,
+} from "../src/workbench/zip";
 
 const decoder = new TextDecoder();
 
@@ -92,6 +97,32 @@ describe("deterministic stored ZIP", () => {
       expect(entry.centralCrc32).toBe(expectedCrc32);
     }
     expect(parsed[1].centralCrc32).toBe(0xcbf43926);
+  });
+
+  test("streams byte-identical output in bounded chunks", async () => {
+    const entries = [
+      { name: "large.bin", bytes: new Uint8Array(150 * 1024).fill(7) },
+      { name: "small.txt", bytes: new TextEncoder().encode("small") },
+    ];
+    const expected = createStoredZip(entries);
+    const streamed = createStoredZipStream(entries);
+    const reader = streamed.stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const result = await reader.read();
+      if (result.done) break;
+      chunks.push(result.value);
+    }
+
+    expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(64 * 1024);
+    expect(streamed.byteLength).toBe(expected.length);
+    const actual = new Uint8Array(streamed.byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      actual.set(chunk, offset);
+      offset += chunk.length;
+    }
+    expect(actual).toEqual(expected);
   });
 
   test("rejects empty archives, duplicate names, and invalid entry bytes", () => {

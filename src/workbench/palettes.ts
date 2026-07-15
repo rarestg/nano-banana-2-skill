@@ -1,8 +1,8 @@
 export interface ColorPalette {
-  id: string;
-  name: string;
-  description: string;
-  colors: string[];
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly colors: readonly string[];
 }
 
 export const DEFAULT_PALETTE_ID = "folio-teal";
@@ -94,16 +94,22 @@ export const COLOR_PALETTES: readonly ColorPalette[] = [
   },
 ];
 
+const paletteIds = new Set<string>();
 for (const palette of COLOR_PALETTES) {
-  if (
-    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(palette.id) ||
-    palette.colors.length < 4 ||
-    palette.colors.length > 12 ||
-    new Set(palette.colors).size !== palette.colors.length ||
-    palette.colors.some((color) => !/^#[0-9A-F]{6}$/.test(color))
-  ) {
-    throw new Error(`Invalid color palette: ${palette.id}`);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(palette.id)) {
+    throw new Error(`Invalid color palette ID: ${palette.id}`);
   }
+  if (paletteIds.has(palette.id)) throw new Error(`Duplicate color palette ID: ${palette.id}`);
+  paletteIds.add(palette.id);
+  if (palette.colors.length < 4 || palette.colors.length > 12) {
+    throw new Error(`Color palette ${palette.id} must contain 4 to 12 colors.`);
+  }
+  if (new Set(palette.colors).size !== palette.colors.length) {
+    throw new Error(`Color palette ${palette.id} contains duplicate colors.`);
+  }
+  const invalidColor = palette.colors.find((color) => !/^#[0-9A-F]{6}$/.test(color));
+  if (invalidColor !== undefined)
+    throw new Error(`Color palette ${palette.id} has invalid color ${invalidColor}.`);
 }
 
 export function getColorPalette(id: string) {

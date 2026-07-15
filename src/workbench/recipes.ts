@@ -141,6 +141,9 @@ function assertRecipe(value: unknown, path: string): asserts value is Recipe {
   if (promptVariables.some((variable) => !["{{subject}}", "{{colorPalette}}"].includes(variable))) {
     throw new Error(`Recipe ${recipe.id} uses an unknown prompt variable.`);
   }
+  if (recipe.kind === "custom" && promptVariables.some((variable) => variable !== "{{subject}}")) {
+    throw new Error(`Custom recipe ${recipe.id} may only use the subject prompt variable.`);
+  }
   if (recipe.kind !== "custom" && !promptVariables.includes("{{colorPalette}}")) {
     throw new Error(`Recipe ${recipe.id} must use the colorPalette prompt variable.`);
   }
