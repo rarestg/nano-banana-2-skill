@@ -209,10 +209,8 @@ function updatePaletteDescription() {
   const palette = state.bootstrap.palettes.find((item) => item.id === selectedPaletteId());
   if (!palette) return;
   const unused = customRecipeOnly();
-  $("#palette-status").textContent = unused ? "Palette not used." : "";
-  $("#palette-description-copy").textContent = unused
-    ? " Custom uses the subject as its complete prompt, so no palette is inserted."
-    : palette.description;
+  $("#palette-status").textContent = unused ? "Palette not used in Custom mode." : "";
+  $("#palette-description-copy").textContent = unused ? "" : palette.description;
 }
 
 function updatePaletteAvailability() {

@@ -113,13 +113,37 @@ describe("workbench browser contract", () => {
       "Custom icon replaces the selected style recipes",
     );
     expect((await page.locator("#palette-description").textContent())?.trim()).toBe(
-      "Palette not used. Custom uses the subject as its complete prompt, so no palette is inserted.",
+      "Palette not used in Custom mode.",
     );
     expect(await page.locator("#palette-picker").getAttribute("disabled")).not.toBeNull();
 
     await image.check();
     expect(await page.locator("#recipe-feedback").textContent()).toBe("");
     expect(await image.isChecked()).toBe(true);
+
+    const paletteLayout = () =>
+      page.locator("#palette-picker").evaluate((picker) => {
+        const height = (selector: string) => {
+          const element = picker.querySelector(selector);
+          if (!element) throw new Error(`Missing palette element: ${selector}`);
+          return Math.round(element.getBoundingClientRect().height * 100) / 100;
+        };
+        return {
+          picker: Math.round(picker.getBoundingClientRect().height * 100) / 100,
+          options: height(".palette-options"),
+          selectedCard: height(".palette-option:has(input:checked) .palette-card"),
+          description: height("#palette-description"),
+        };
+      });
+    const airy = page.locator('input[name="recipe"][value="airy-pastel-modernist"]');
+    const customImage = page.locator('input[name="recipe"][value="custom"]');
+    for (const width of [1440, 760]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await airy.check();
+      const airyLayout = await paletteLayout();
+      await customImage.check();
+      expect(await paletteLayout()).toEqual(airyLayout);
+    }
   });
 
   test("uses a collapsed history rail, accessible candidate identity, and a no-scroll contact sheet", async () => {
@@ -207,7 +231,7 @@ describe("workbench browser contract", () => {
     expect(await custom.isChecked()).toBe(true);
     expect(await flat.isChecked()).toBe(false);
     expect(await page.locator("#palette-description").textContent()).toContain(
-      "no palette is inserted",
+      "Palette not used in Custom mode",
     );
     expect(await page.locator("#palette-picker").getAttribute("disabled")).not.toBeNull();
     await custom.click();

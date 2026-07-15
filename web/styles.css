@@ -716,8 +716,9 @@ textarea {
 }
 
 .palette-option > input:checked + .palette-card {
-  border: 2px solid var(--accent);
+  border-color: var(--accent);
   background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .palette-option > input:focus-visible + .palette-card {
@@ -731,8 +732,9 @@ textarea {
 }
 
 .palette-picker:disabled .palette-option > input:checked + .palette-card {
-  border: 1px solid var(--line);
+  border-color: var(--line);
   background: var(--surface-muted);
+  box-shadow: none;
 }
 
 #palette-description {
@@ -798,16 +800,26 @@ textarea {
 
 @media (forced-colors: active) {
   .output-option input:checked + span,
-  .palette-option > input:checked:not(:disabled) + .palette-card,
   .recipe-option input:checked + .recipe-card {
     border: 2px solid Highlight;
     box-shadow: none;
+  }
+
+  .palette-option > input:checked:not(:disabled) + .palette-card {
+    border-color: Highlight;
+    outline: 1px solid Highlight;
+    outline-offset: -2px;
   }
 
   .output-option input:focus-visible + span,
   .palette-option > input:focus-visible + .palette-card,
   .recipe-option input:focus-visible + .recipe-card {
     outline-color: Highlight;
+  }
+
+  .palette-option > input:focus-visible + .palette-card {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }
 
