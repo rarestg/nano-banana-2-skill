@@ -44,7 +44,8 @@ do not repeat the token. The browser receives only whether an API key is
 configured, never the key itself.
 
 The default workflow creates four independent variants with at most two calls
-running concurrently. Choose one recipe, or compare two to three Folio recipes.
+running concurrently. Choose Images or Icons, then choose one recipe or compare
+two to three styles within that output family.
 Comparison calls are interleaved round-robin and share the same subject,
 provider settings, and ordered reference bytes.
 
@@ -53,12 +54,20 @@ Built-in recipes:
 - Folio geometric isometric: current production direction.
 - Folio flat cut-paper.
 - Folio restrained screenprint.
-- Custom: the subject field is the complete prompt, with no style contract.
+- Airy pastel modernist: luminous, tactile illustration on toothy paper.
+- Tenebrist oil realism: dark, theatrical volume shaped by concentrated light.
+- Hard-edge geometric screenprint: exact flat shapes and modernist graphic structure.
+- Ornamental miniature maximalism: disciplined intricacy, pattern, and jewel-like color.
+- Refined pixel art: crisp silhouettes, deliberate pixel clusters, and restrained shading.
+- Custom image: the subject field is the complete prompt with raw output.
+- Custom icon: the subject field is the complete prompt with circular icon export.
 
 The Workbench exposes only verified settings:
 
 - Exact supported model IDs.
 - Model-supported output resolutions and aspect ratios.
+- Seven curated color palettes containing 4 to 12 colors; the selected palette
+  is inserted into every non-Custom recipe.
 - Ordered PNG, JPEG, WebP, or GIF references.
 - Google Search grounding under Advanced; off by default.
 
@@ -82,6 +91,11 @@ ordered reference copies and hashes, candidate states, raw images and hashes,
 reported usage, calculated or upper-bound cost, selection, and exports. Regeneration creates a
 new session linked with `derivedFromSessionId`; references can be copied from the
 parent byte-for-byte.
+
+Selected candidates can also be downloaded through the browser as one ZIP. The
+ZIP contains byte-identical generated files for Images and production-ready
+384×384 circular PNGs for Icons. Browser downloads do not create durable export
+records or change the session.
 
 Folio project-icon exports contain:
 

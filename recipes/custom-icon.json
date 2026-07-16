@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "custom-icon",
+  "version": 1,
+  "name": "Custom icon",
+  "description": "Use the subject field as the complete prompt and export a circular Folio icon.",
+  "kind": "custom",
+  "comparable": false,
+  "promptTemplate": "{{subject}}",
+  "preview": {
+    "type": "folio-icon",
+    "sizes": [80, 96, 112],
+    "backgrounds": {
+      "light": "#FAFAFA",
+      "dark": "#18181B"
+    }
+  },
+  "export": {
+    "type": "folio-icon",
+    "width": 384,
+    "height": 384,
+    "transparentOutsideCircle": true
+  }
+}

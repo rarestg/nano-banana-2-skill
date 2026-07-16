@@ -51,12 +51,17 @@ try {
   const root = await fetch(`${origin}/`, { headers: { cookie } });
   const bootstrap = await fetch(`${origin}/api/bootstrap`, { headers: { cookie } });
   const styles = await fetch(`${origin}/styles.css`, { headers: { cookie } });
-  const body = (await bootstrap.json()) as { recipes?: unknown[]; models?: unknown[] };
+  const body = (await bootstrap.json()) as {
+    recipes?: unknown[];
+    palettes?: unknown[];
+    models?: unknown[];
+  };
   if (
     !root.ok ||
     !styles.ok ||
     !bootstrap.ok ||
-    body.recipes?.length !== 4 ||
+    body.recipes?.length !== 10 ||
+    body.palettes?.length !== 7 ||
     !body.models?.length
   ) {
     throw new Error("Built workbench could not load packaged web/recipe assets.");

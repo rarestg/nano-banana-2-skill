@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Browser, type BrowserContext, chromium, type Page, type Request } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Locator,
+  type Page,
+  type Request,
+} from "playwright";
 
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
 import { pngBytes, sessionInput, svgResult } from "./helpers";
@@ -90,6 +97,119 @@ async function elementContrast(page: Page, selector: string) {
 }
 
 describe("workbench browser contract", () => {
+  test("keeps selector cards compact without redundant state or exact-color rows", async () => {
+    const { page } = await openWorkbench();
+
+    const icon = page.locator('input[name="output-family"][value="icon"]');
+    const image = page.locator('input[name="output-family"][value="image"]');
+    expect(await page.locator(".output-state, .recipe-state, .palette-state").count()).toBe(0);
+    expect(await page.locator("#palette-preview").count()).toBe(0);
+    expect(await page.locator("#palette-picker").textContent()).not.toContain("#FAFAFA");
+
+    const contentInset = (input: Locator, cardSelector: string) =>
+      input.locator(`+ ${cardSelector}`).evaluate((card) => {
+        const label = card.querySelector("strong");
+        if (!label) throw new Error("Missing selector label.");
+        const cardRect = card.getBoundingClientRect();
+        const labelRect = label.getBoundingClientRect();
+        return { left: labelRect.left - cardRect.left, top: labelRect.top - cardRect.top };
+      });
+    const imageInset = await contentInset(image, "span");
+    await image.check();
+    expect(await contentInset(image, "span")).toEqual(imageInset);
+    await icon.check();
+
+    await page.emulateMedia({ forcedColors: "active" });
+    expect(
+      await icon.locator("+ span").evaluate((card) => ({
+        border: getComputedStyle(card).borderWidth,
+        outline: getComputedStyle(card).outlineWidth,
+      })),
+    ).toEqual({ border: "1px", outline: "1px" });
+    await page.emulateMedia({ forcedColors: "none" });
+
+    const flat = page.locator('input[name="recipe"][value="folio-flat-cut-paper"]');
+    const custom = page.locator('input[name="recipe"][value="custom-icon"]');
+    const flatInset = await contentInset(flat, ".recipe-card");
+    await flat.check();
+    expect(await contentInset(flat, ".recipe-card")).toEqual(flatInset);
+    await custom.check();
+    expect(await page.locator("#recipe-feedback").textContent()).toContain(
+      "Custom icon replaces the selected style recipes",
+    );
+    expect((await page.locator("#palette-description").textContent())?.trim()).toBe(
+      "Palette not used in Custom mode.",
+    );
+    expect(await page.locator("#palette-picker").getAttribute("disabled")).not.toBeNull();
+
+    await image.check();
+    expect(await page.locator("#recipe-feedback").textContent()).toBe("");
+    expect(await image.isChecked()).toBe(true);
+
+    const paletteLayout = () =>
+      page.locator("#palette-picker").evaluate((picker) => {
+        const height = (selector: string) => {
+          const element = picker.querySelector(selector);
+          if (!element) throw new Error(`Missing palette element: ${selector}`);
+          return Math.round(element.getBoundingClientRect().height * 100) / 100;
+        };
+        return {
+          picker: Math.round(picker.getBoundingClientRect().height * 100) / 100,
+          options: height(".palette-options"),
+          selectedCard: height(".palette-option:has(input:checked) .palette-card"),
+          description: height("#palette-description"),
+        };
+      });
+    const airy = page.locator('input[name="recipe"][value="airy-pastel-modernist"]');
+    const customImage = page.locator('input[name="recipe"][value="custom"]');
+    for (const width of [1440, 760]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await airy.check();
+      const airyLayout = await paletteLayout();
+      await customImage.check();
+      expect(await paletteLayout()).toEqual(airyLayout);
+    }
+
+    expect(
+      await page
+        .locator('input[name="recipe"]')
+        .evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value)),
+    ).toEqual([
+      "airy-pastel-modernist",
+      "hard-edge-geometric-screenprint",
+      "ornamental-miniature-maximalism",
+      "refined-pixel-art",
+      "tenebrist-oil-realism",
+      "custom",
+    ]);
+    for (const [width, columns] of [
+      [1440, 6],
+      [1100, 3],
+      [760, 3],
+      [390, 1],
+    ] as const) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(
+        await page
+          .locator(".recipe-grid")
+          .evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length),
+      ).toBe(columns);
+      expect(
+        await page.locator(".recipe-grid").evaluate((grid) => grid.scrollWidth <= grid.clientWidth),
+      ).toBe(true);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await airy.check();
+    await page.locator('input[name="recipe"][value="hard-edge-geometric-screenprint"]').check();
+    await page.locator('input[name="recipe"][value="ornamental-miniature-maximalism"]').check();
+    await page.locator('input[name="recipe"][value="tenebrist-oil-realism"]').click();
+    expect(await page.locator('input[name="recipe"]:checked').count()).toBe(3);
+    expect(await page.locator("#recipe-feedback").textContent()).toBe(
+      "Choose up to three style recipes per run.",
+    );
+  });
+
   test("uses a collapsed history rail, accessible candidate identity, and a no-scroll contact sheet", async () => {
     const { page } = await openWorkbench();
 
@@ -125,22 +245,66 @@ describe("workbench browser contract", () => {
     expect(await placeholderContrast(page)).toBeGreaterThanOrEqual(4.5);
     await page.fill("#subject", "A focused lighthouse icon.");
     expect(await page.locator("#subject-count").textContent()).toBe("26 / 12,000");
+    expect(await page.locator('input[name="output-family"][value="icon"]').isChecked()).toBe(true);
+    expect(await page.locator("#aspect").isDisabled()).toBe(true);
+    expect(await page.locator("#aspect").inputValue()).toBe("1:1");
+    expect(await page.locator('input[name="recipe"]').count()).toBe(4);
+    expect(await page.locator('input[name="recipe"][value="custom-icon"]').count()).toBe(1);
+    expect(await page.locator('input[name="recipe"][value="airy-pastel-modernist"]').count()).toBe(
+      0,
+    );
+    await page.locator('input[name="output-family"][value="image"]').check();
+    expect(await page.locator('input[name="recipe"]').count()).toBe(6);
+    expect(
+      await page.locator('input[name="recipe"][value="airy-pastel-modernist"]').isChecked(),
+    ).toBe(true);
+    expect(await page.locator("#aspect").isEnabled()).toBe(true);
+    expect(await page.locator("#aspect").inputValue()).toBe("16:9");
+    await page.locator('input[name="output-family"][value="icon"]').check();
+    expect(await page.locator('input[name="palette"]').count()).toBe(7);
+    expect(await page.locator(".palette-card").count()).toBe(7);
+    expect(await page.locator('input[name="palette"][value="folio-teal"]').isChecked()).toBe(true);
+    expect(
+      await page
+        .locator(".palette-options")
+        .evaluate((options) => getComputedStyle(options).gridTemplateColumns.split(" ").length),
+    ).toBe(7);
+    await page.setViewportSize({ width: 1100, height: 900 });
+    expect(
+      await page
+        .locator(".palette-options")
+        .evaluate((options) => getComputedStyle(options).gridTemplateColumns.split(" ").length),
+    ).toBe(4);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.locator('input[name="palette"][value="pastel-prism"]').check();
+    expect(await page.locator("#palette-description").textContent()).toContain(
+      "broad twelve-color spectrum",
+    );
+    expect(await page.locator('input[name="palette"][value="pastel-prism"]').isChecked()).toBe(
+      true,
+    );
+    await page.locator('input[name="palette"][value="sunlit-coral"]').check();
 
     const flat = page.locator('input[name="recipe"][value="folio-flat-cut-paper"]');
-    const custom = page.locator('input[name="recipe"][value="custom"]');
+    const custom = page.locator('input[name="recipe"][value="custom-icon"]');
     await flat.check();
     await custom.check();
     expect(await page.locator("#recipe-feedback").textContent()).toContain(
-      "Custom replaces the selected Folio style recipes",
+      "Custom icon replaces the selected style recipes",
     );
     expect(await custom.isChecked()).toBe(true);
     expect(await flat.isChecked()).toBe(false);
+    expect(await page.locator("#palette-description").textContent()).toContain(
+      "Palette not used in Custom mode",
+    );
+    expect(await page.locator("#palette-picker").getAttribute("disabled")).not.toBeNull();
     await custom.click();
     expect(await custom.isChecked()).toBe(true);
     expect(await page.locator("#recipe-feedback").textContent()).toContain(
       "At least one style recipe is required",
     );
     await page.locator('input[name="recipe"][value="folio-geometric-isometric"]').check();
+    expect(await page.locator("#palette-picker").getAttribute("disabled")).toBeNull();
 
     let releaseCreate!: () => void;
     const createPaused = new Promise<void>((resolve) => {
@@ -177,6 +341,7 @@ describe("workbench browser contract", () => {
     await page.unroute("**/api/sessions");
 
     expect(await page.locator("#run-summary").isVisible()).toBe(true);
+    expect(await page.locator("#summary-settings").textContent()).toContain("Sunlit coral");
     expect(await page.locator(".editor-fields").isHidden()).toBe(true);
     const first = page.locator('[data-candidate="candidate-1-1"]');
     expect(await first.getAttribute("aria-label")).toBe(
@@ -186,9 +351,9 @@ describe("workbench browser contract", () => {
       "Generated Folio geometric isometric → A focused lighthouse icon. → Variant 1 of 4",
     );
     expect(await first.locator(".candidate-label span").count()).toBe(0);
-    expect(await first.locator(".export-check").textContent()).toBe("Export");
+    expect(await first.locator(".export-check").textContent()).toBe("Select");
     expect(await first.locator("[data-export-select]").getAttribute("aria-label")).toContain(
-      "bulk export",
+      "download or export",
     );
     expect(await page.locator("#progress").textContent()).toBe("4 total · 4 succeeded");
     expect(await page.locator(".identity-path").textContent()).toContain("Variant 1 of 4");
@@ -234,6 +399,7 @@ describe("workbench browser contract", () => {
     expect(await page.locator("#history-toggle").getAttribute("aria-expanded")).toBe("true");
     expect(await page.locator("#history-toggle").getAttribute("title")).toBe("Hide history");
     expect(await page.locator(".history-item").getAttribute("aria-current")).toBe("true");
+    expect(await page.locator(".history-style-count").textContent()).toBe("1");
     const drawerStyle = await page.locator("#history-drawer").evaluate((drawer) => ({
       height: Number.parseFloat(getComputedStyle(drawer).height),
       maxHeight: getComputedStyle(drawer).maxHeight,
@@ -273,7 +439,15 @@ describe("workbench browser contract", () => {
     const { instance, page } = await openWorkbench({}, { width: 1600, height: 900 });
     for (let index = 1; index <= 24; index++) {
       await instance.store.createSession(
-        sessionInput({ subject: `History session ${index}.`, variantsPerRecipe: 1 }),
+        sessionInput({
+          subject: `History session ${index}.`,
+          variantsPerRecipe: 1,
+          ...(index === 1
+            ? {
+                recipeIds: ["folio-geometric-isometric", "folio-flat-cut-paper"],
+              }
+            : {}),
+        }),
       );
     }
 
@@ -281,6 +455,11 @@ describe("workbench browser contract", () => {
     await page.click("#history-refresh");
     await page.waitForFunction(() => document.querySelectorAll(".history-item").length === 24);
     expect(await page.locator(".history-item").count()).toBe(24);
+    expect(
+      await page
+        .locator('.history-item:has-text("History session 1.") .history-style-count')
+        .textContent(),
+    ).toBe("2");
     expect(
       await page
         .locator(".history-item")
@@ -410,6 +589,87 @@ describe("workbench browser contract", () => {
     expect(await page.evaluate(() => scrollY)).toBe(0);
   }, 30_000);
 
+  test("downloads individual and selected assets without creating durable exports", async () => {
+    const { instance, page } = await openWorkbench();
+    await generate(page, "Remote browser download.", 1);
+    expect(await page.locator('[data-download="candidate-1-1"]').textContent()).toBe(
+      "Download candidate as ZIP",
+    );
+    const singleDownloadPromise = page.waitForEvent("download");
+    await page.locator('[data-download="candidate-1-1"]').click();
+    const singleDownload = await singleDownloadPromise;
+    expect(await page.locator('[data-export-select="candidate-1-1"]').isChecked()).toBe(false);
+
+    await page.locator('[data-export-select="candidate-1-1"]').check();
+    expect(await page.locator("[data-download-selected]").textContent()).toBe("Download ZIP (1)");
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("[data-download-selected]").click();
+    const download = await downloadPromise;
+    const history = await instance.store.listHistory();
+    expect(singleDownload.suggestedFilename()).toBe(`nano-banana-${history[0].id}.zip`);
+    expect(download.suggestedFilename()).toBe(`nano-banana-${history[0].id}.zip`);
+    const path = await download.path();
+    if (!path) throw new Error("Expected browser download path.");
+    expect([...new Uint8Array(await Bun.file(path).arrayBuffer()).slice(0, 4)]).toEqual([
+      0x50, 0x4b, 0x03, 0x04,
+    ]);
+    expect((await instance.store.readSession(history[0].id)).exports).toEqual([]);
+    expect(await page.locator('[data-export-select="candidate-1-1"]').isChecked()).toBe(true);
+  });
+
+  test("surfaces browser-download endpoint failures without saving an error response", async () => {
+    const { page } = await openWorkbench();
+    await generate(page, "Download failure feedback.", 1);
+    const failures = [
+      {
+        status: 409,
+        code: "source_changed",
+        message: "Selected candidate source changed. Generate it again before downloading.",
+      },
+      {
+        status: 413,
+        code: "download_too_large",
+        message: "Selected assets are too large to download together.",
+      },
+    ];
+    let downloads = 0;
+    page.on("download", () => downloads++);
+    await page.route(/\/api\/sessions\/[^/]+\/download\?/, (route) => {
+      const failure = failures.shift();
+      if (!failure) throw new Error("Unexpected download attempt.");
+      return route.fulfill({
+        status: failure.status,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: failure.code, message: failure.message } }),
+      });
+    });
+
+    for (const message of [
+      "Selected candidate source changed. Generate it again before downloading.",
+      "Selected assets are too large to download together.",
+    ]) {
+      await page.locator('[data-download="candidate-1-1"]').click();
+      await page.waitForFunction(
+        (expected) => document.querySelector("#session-message")?.textContent === expected,
+        message,
+      );
+      expect(await page.locator("#session-message").getAttribute("class")).toContain("error");
+    }
+    expect(downloads).toBe(0);
+  });
+
+  test("labels an absent historical palette snapshot as not recorded", async () => {
+    const { page } = await openWorkbench();
+    await page.route(/\/api\/sessions(?:\/[^/?]+)?$/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (body.session) delete body.session.palette;
+      await route.fulfill({ response, json: body });
+    });
+    await generate(page, "Legacy palette summary.", 1);
+    expect(await page.locator("#summary-settings").textContent()).toContain("PaletteNot recorded");
+  });
+
   test("keeps desktop candidate sheets on four equal tracks", async () => {
     const { page } = await openWorkbench({}, { width: 1600, height: 1000 });
 
@@ -514,7 +774,7 @@ describe("workbench browser contract", () => {
 
     await page.locator('[data-export-select="candidate-1-1"]').check();
     await page.locator('[data-export-select="candidate-1-3"]').check();
-    expect(await page.locator("[data-export-selected]").textContent()).toBe("Export selected (2)");
+    expect(await page.locator("[data-export-selected]").textContent()).toBe("Export to disk (2)");
 
     await page.locator('[data-export="candidate-1-2"]').click();
     await page.waitForFunction(() =>
@@ -703,7 +963,7 @@ describe("workbench browser contract", () => {
     ).toBe("true");
     expect(await page.locator(".identity-path").textContent()).toContain("Variant 2 of 2");
     expect(await page.locator(".arm-prompt").getAttribute("open")).not.toBeNull();
-    expect(await page.locator("[data-export-selected]").textContent()).toBe("Export selected (1)");
+    expect(await page.locator("[data-export-selected]").textContent()).toBe("Export to disk (1)");
     expect(await page.locator(".editor-fields").isVisible()).toBe(true);
     expect(await page.locator("#subject").inputValue()).toBe("Draft preserved during polling.");
     expect(await page.locator("#candidate-inspector").textContent()).toContain(

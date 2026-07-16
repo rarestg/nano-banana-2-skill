@@ -4,9 +4,10 @@ import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/prom
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCommand } from "../src/image-tools";
+import { runCommand, validateImageBytes } from "../src/image-tools";
 import {
   hashForTest,
+  MAX_DOWNLOAD_ASSET_BYTES,
   MAX_REFERENCE_BYTES,
   SessionStore,
   WorkbenchError,
@@ -17,6 +18,12 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+
+async function downloadTemps() {
+  return new Set(
+    (await readdir(tmpdir())).filter((name) => name.startsWith("nano-banana-download-")),
+  );
+}
 
 describe("durable sessions", () => {
   test("copies ordered references, sanitizes names, hashes bytes, and renders prompt lineage", async () => {
@@ -44,12 +51,223 @@ describe("durable sessions", () => {
       hashForTest(second),
     ]);
     expect(manifest.arms[0].renderedPrompt).toContain(manifest.subject);
+    expect(manifest.palette?.id).toBe("folio-teal");
+    expect(manifest.arms[0].renderedPrompt).toContain(manifest.palette?.colors.join(", ") ?? "");
     expect(manifest.arms[0].promptSha256).toBe(hashForTest(manifest.arms[0].renderedPrompt));
     expect(manifest.arms[0].recipeSha256).toBe(
       hashForTest(JSON.stringify(manifest.arms[0].recipe)),
     );
     expect(JSON.stringify(manifest)).not.toContain(root);
     expect(() => store.pathInSession(manifest.id, "../../escape")).toThrow("escapes workbench");
+  });
+
+  test("validates and snapshots the selected color palette", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const manifest = await store.createSession(
+      sessionInput({ paletteId: "sunlit-coral", variantsPerRecipe: 1 }),
+    );
+    expect(manifest.palette?.id).toBe("sunlit-coral");
+    expect(manifest.palette?.colors).toHaveLength(8);
+    expect(manifest.arms[0].renderedPrompt).toContain("#F43F5E");
+    await expect(
+      store.createSession(sessionInput({ paletteId: "not-a-palette", variantsPerRecipe: 1 })),
+    ).rejects.toMatchObject({ code: "unknown_palette" });
+  });
+
+  test("keeps image and icon recipe families in separate runs", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    await expect(
+      store.createSession(
+        sessionInput({
+          recipeIds: ["airy-pastel-modernist", "folio-geometric-isometric"],
+          variantsPerRecipe: 1,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "mixed_recipe_families" });
+    await expect(
+      store.createSession(
+        sessionInput({
+          recipeIds: ["custom-icon"],
+          aspectRatio: "16:9",
+          variantsPerRecipe: 1,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "project_icon_requires_square" });
+  });
+
+  test("prepares browser downloads without changing durable session state", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const iconSession = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const iconResult = svgResult("download icon");
+    const iconImages = await store.saveCandidateImages(
+      iconSession.id,
+      "candidate-1-1",
+      iconResult.images,
+    );
+    await store.updateSession(iconSession.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = iconImages;
+    });
+    const before = await store.readSession(iconSession.id);
+    const temporaryBefore = await downloadTemps();
+    const iconDownload = await store.prepareDownloadAssets(iconSession.id, ["candidate-1-1"]);
+    expect(iconDownload.assets.map((asset) => asset.name)).toEqual([
+      "01-folio-geometric-isometric-variant-1.png",
+    ]);
+    expect(
+      await validateImageBytes(iconDownload.assets[0].bytes, "image/png", join(root, "validation")),
+    ).toMatchObject({ width: 384, height: 384 });
+    expect(await store.readSession(iconSession.id)).toEqual(before);
+    expect([...(await downloadTemps())].filter((name) => !temporaryBefore.has(name))).toEqual([]);
+
+    const imageSession = await store.createSession(
+      sessionInput({
+        recipeIds: ["airy-pastel-modernist"],
+        aspectRatio: "16:9",
+        variantsPerRecipe: 1,
+      }),
+    );
+    const rawResult = svgResult("download image");
+    const rawImages = await store.saveCandidateImages(
+      imageSession.id,
+      "candidate-1-1",
+      rawResult.images,
+    );
+    await store.updateSession(imageSession.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = rawImages;
+    });
+    const imageDownload = await store.prepareDownloadAssets(imageSession.id, ["candidate-1-1"]);
+    expect(imageDownload.assets[0].name).toBe("01-airy-pastel-modernist-variant-1.svg");
+    expect(imageDownload.assets[0].bytes).toEqual(rawResult.images[0].bytes);
+    await expect(store.prepareDownloadAssets(imageSession.id, [])).rejects.toMatchObject({
+      code: "invalid_download_selection",
+    });
+    await expect(
+      store.prepareDownloadAssets(imageSession.id, ["candidate-1-1", "candidate-1-1"]),
+    ).rejects.toMatchObject({ code: "invalid_download_selection" });
+  });
+
+  test("converts a staged copy of the single verified icon source read", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nano-banana-workbench-test-"));
+    roots.push(root);
+    const trustedBytes = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#00BBA7"/></svg>',
+    );
+    const replacementBytes = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#F43F5E"/></svg>',
+    );
+
+    class ReplacingSourceStore extends SessionStore {
+      sourcePath?: string;
+      sourceReads = 0;
+
+      override async readSessionFile(sessionId: string, relativePath: string) {
+        const bytes = await super.readSessionFile(sessionId, relativePath);
+        if (relativePath === this.sourcePath) {
+          this.sourceReads += 1;
+          await writeFile(this.pathInSession(sessionId, relativePath), replacementBytes);
+        }
+        return bytes;
+      }
+    }
+
+    const store = new ReplacingSourceStore(root);
+    await store.initialize();
+    const session = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const images = await store.saveCandidateImages(session.id, "candidate-1-1", [
+      { bytes: trustedBytes, mimeType: "image/svg+xml" },
+    ]);
+    await store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+    store.sourcePath = images[0].path;
+
+    const download = await store.prepareDownloadAssets(session.id, ["candidate-1-1"]);
+    expect(store.sourceReads).toBe(1);
+    expect(download.assets[0].name).toBe("01-folio-geometric-isometric-variant-1.png");
+    expect(
+      await validateImageBytes(download.assets[0].bytes, "image/png", join(root, "validation")),
+    ).toMatchObject({ width: 384, height: 384 });
+    const downloadedPath = join(root, "downloaded.png");
+    await writeFile(downloadedPath, download.assets[0].bytes);
+    const center = await runCommand("convert", [
+      downloadedPath,
+      "-format",
+      "%[pixel:p{192,192}]",
+      "info:",
+    ]);
+    expect(center.stdout).toMatch(/(?:0,187,167|#00BBA7)/i);
+  }, 15_000);
+
+  test("keeps hostile stored metadata out of temp paths and cleans up failed conversions", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const session = await store.createSession(sessionInput({ variantsPerRecipe: 1 }));
+    const result = svgResult("hostile download metadata");
+    const images = await store.saveCandidateImages(session.id, "candidate-1-1", result.images);
+    const escapeName = `nano-banana-escape-${crypto.randomUUID()}`;
+    const escapePath = join(tmpdir(), `${escapeName}-variant-1.png`);
+    await store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].recipe.id = `x/../../${escapeName}`;
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+    });
+
+    const temporaryBefore = await downloadTemps();
+    const before = await store.readSession(session.id);
+    const download = await store.prepareDownloadAssets(session.id, ["candidate-1-1"]);
+    expect(download.assets[0].name).toBe(`01-${escapeName}-variant-1.png`);
+    expect(existsSync(escapePath)).toBe(false);
+    expect(await store.readSession(session.id)).toEqual(before);
+    expect([...(await downloadTemps())].filter((name) => !temporaryBefore.has(name))).toEqual([]);
+
+    await store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].images[0].width += 1;
+    });
+    const failedTemporaryBefore = await downloadTemps();
+    await expect(store.prepareDownloadAssets(session.id, ["candidate-1-1"])).rejects.toMatchObject({
+      code: "source_changed",
+    });
+    expect([...(await downloadTemps())].filter((name) => !failedTemporaryBefore.has(name))).toEqual(
+      [],
+    );
+    expect(existsSync(escapePath)).toBe(false);
+  });
+
+  test("preflights the declared source payload with an inclusive 256 MiB boundary", async () => {
+    const { root, store } = await temporaryStore();
+    roots.push(root);
+    const session = await store.createSession(
+      sessionInput({
+        recipeIds: ["airy-pastel-modernist"],
+        aspectRatio: "16:9",
+        variantsPerRecipe: 1,
+      }),
+    );
+    const result = svgResult("download boundary");
+    const images = await store.saveCandidateImages(session.id, "candidate-1-1", result.images);
+    await store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].status = "succeeded";
+      manifest.arms[0].candidates[0].images = images;
+      manifest.arms[0].candidates[0].images[0].bytes = MAX_DOWNLOAD_ASSET_BYTES + 1;
+    });
+
+    await expect(store.prepareDownloadAssets(session.id, ["candidate-1-1"])).rejects.toMatchObject({
+      code: "download_too_large",
+      status: 413,
+    });
+
+    await store.updateSession(session.id, (manifest) => {
+      manifest.arms[0].candidates[0].images[0].bytes = MAX_DOWNLOAD_ASSET_BYTES;
+    });
+    await expect(store.prepareDownloadAssets(session.id, ["candidate-1-1"])).rejects.toMatchObject({
+      code: "source_changed",
+    });
   });
 
   test("requires confirmation above eight calls and schedules comparisons round-robin", async () => {

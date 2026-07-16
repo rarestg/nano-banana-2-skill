@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { packageRoot } from "../paths";
+import { type ColorPalette, palettePrompt } from "./palettes";
 
 export interface Recipe {
   schemaVersion: 1;
@@ -9,7 +10,7 @@ export interface Recipe {
   version: number;
   name: string;
   description: string;
-  kind: "project-icon" | "custom";
+  kind: "project-icon" | "artwork" | "custom";
   comparable: boolean;
   promptTemplate: string;
   preview:
@@ -29,7 +30,14 @@ export interface Recipe {
     | { type: "raw-only" };
 }
 
+export function recipeFamily(recipe: Recipe): "image" | "icon" {
+  return recipe.export.type === "folio-icon" ? "icon" : "image";
+}
+
 const defaultRecipeDirectory = join(packageRoot(), "recipes");
+
+export const FULL_FRAME_ARTWORK_MODIFIER =
+  "Render only the finished artwork itself as a clean, full-frame image. Do not show a physical canvas, manuscript, page, book, print, poster, frame, wall, studio, screen, monitor, photograph, or presentation mockup. Show no physical page edges, borders, cast shadows, or surrounding presentation context. Any ornamental border must be an intentional element inside the artwork itself, not the visible edge of a physical sheet.";
 
 function assertRecipe(value: unknown, path: string): asserts value is Recipe {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -56,7 +64,7 @@ function assertRecipe(value: unknown, path: string): asserts value is Recipe {
     (recipe.version as number) < 1 ||
     typeof recipe.name !== "string" ||
     typeof recipe.description !== "string" ||
-    !["project-icon", "custom"].includes(String(recipe.kind)) ||
+    !["project-icon", "artwork", "custom"].includes(String(recipe.kind)) ||
     typeof recipe.comparable !== "boolean" ||
     typeof recipe.promptTemplate !== "string" ||
     !recipe.promptTemplate.includes("{{subject}}") ||
@@ -119,16 +127,28 @@ function assertRecipe(value: unknown, path: string): asserts value is Recipe {
   if (
     (recipe.kind === "project-icon" &&
       (preview.type !== "folio-icon" || exportSettings.type !== "folio-icon")) ||
+    (recipe.kind === "artwork" &&
+      (preview.type !== "generic" || exportSettings.type !== "raw-only")) ||
     (recipe.kind === "custom" &&
-      (recipe.comparable || preview.type !== "generic" || exportSettings.type !== "raw-only"))
+      (recipe.comparable ||
+        !(
+          (preview.type === "generic" && exportSettings.type === "raw-only") ||
+          (preview.type === "folio-icon" && exportSettings.type === "folio-icon")
+        )))
   ) {
     throw new Error(`Recipe kind does not match preview/export behavior: ${path}`);
   }
-  const unknownVariables = [...recipe.promptTemplate.matchAll(/{{\s*([^}]+)\s*}}/g)].map((match) =>
-    match[1].trim(),
+  const promptVariables = [...recipe.promptTemplate.matchAll(/{{[^{}]*}}/g)].map(
+    (match) => match[0],
   );
-  if (unknownVariables.some((variable) => variable !== "subject")) {
+  if (promptVariables.some((variable) => !["{{subject}}", "{{colorPalette}}"].includes(variable))) {
     throw new Error(`Recipe ${recipe.id} uses an unknown prompt variable.`);
+  }
+  if (recipe.kind === "custom" && promptVariables.some((variable) => variable !== "{{subject}}")) {
+    throw new Error(`Custom recipe ${recipe.id} may only use the subject prompt variable.`);
+  }
+  if (recipe.kind !== "custom" && !promptVariables.includes("{{colorPalette}}")) {
+    throw new Error(`Recipe ${recipe.id} must use the colorPalette prompt variable.`);
   }
 }
 
@@ -146,6 +166,12 @@ export async function loadRecipes(directory = defaultRecipeDirectory) {
   return recipes;
 }
 
-export function renderRecipe(recipe: Recipe, subject: string) {
-  return recipe.promptTemplate.replaceAll("{{subject}}", subject.trim());
+export function renderRecipe(recipe: Recipe, subject: string, palette: ColorPalette) {
+  const template =
+    recipe.kind === "artwork"
+      ? `${recipe.promptTemplate}\n\n${FULL_FRAME_ARTWORK_MODIFIER}`
+      : recipe.promptTemplate;
+  return template.replace(/{{subject}}|{{colorPalette}}/g, (variable) =>
+    variable === "{{subject}}" ? subject.trim() : palettePrompt(palette),
+  );
 }

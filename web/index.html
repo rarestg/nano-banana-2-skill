@@ -72,6 +72,20 @@
               <span id="derived-label" class="muted"></span>
             </div>
 
+            <fieldset class="output-picker">
+              <legend>Output</legend>
+              <div id="output-options" class="output-options">
+                <label class="output-option">
+                  <input type="radio" name="output-family" value="image" />
+                  <span><strong>Images</strong><small>Full-frame backgrounds and artwork</small></span>
+                </label>
+                <label class="output-option">
+                  <input type="radio" name="output-family" value="icon" />
+                  <span><strong>Icons</strong><small>Square, circular production assets</small></span>
+                </label>
+              </div>
+            </fieldset>
+
             <fieldset>
               <legend>Style recipes</legend>
               <div id="recipe-options" class="recipe-grid"></div>
@@ -82,6 +96,14 @@
               <span>Subject prompt <small id="subject-count">0 / 12,000</small></span>
               <textarea id="subject" name="subject" rows="4" maxlength="12000" required placeholder="Describe what to generate. For Custom, this is the complete prompt."></textarea>
             </label>
+
+            <fieldset id="palette-picker" class="palette-picker" aria-describedby="palette-description">
+              <legend>Color palette</legend>
+              <div id="palette-options" class="palette-options"></div>
+              <p id="palette-description" class="hint" aria-live="polite">
+                <strong id="palette-status"></strong><span id="palette-description-copy"></span>
+              </p>
+            </fieldset>
 
             <details class="setup-details">
               <summary>References and generation settings</summary>
@@ -139,7 +161,12 @@
 
           <div class="results-layout">
             <div class="contact-sheet-column">
-              <section id="export-tray" class="export-tray" aria-label="Bulk export" hidden></section>
+              <section
+                id="export-tray"
+                class="export-tray"
+                aria-label="Selected candidate download and export actions"
+                hidden
+              ></section>
               <div id="candidate-groups" class="candidate-groups"></div>
               <details id="export-history" class="export-history"></details>
             </div>
